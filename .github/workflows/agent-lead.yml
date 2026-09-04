@@ -4,9 +4,14 @@ name: agent-lead (reusable)
 # Le a issue, cruza com o capability-map e PROPOE o escopo de repositorios.
 # Nao cria sub-issue: isso so acontece depois da aprovacao humana (HITL 1).
 #
+# NOTA: usamos `gh api` (REST) em vez de `gh issue comment`/`gh issue edit`.
+# Tokens fine-grained tem suporte incompleto a mutations GraphQL - varios
+# comandos do gh CLI caem em GraphQL por baixo e falham com
+# "Resource not accessible by personal access token" mesmo com a permissao
+# REST correta. REST puro evita o problema.
+#
 # NOTA DE SEGURANCA: o texto da issue nunca e interpolado com ${{ }} dentro
-# de um bloco run. Ele trafega por arquivo e por env. Interpolar conteudo
-# controlado pelo usuario em shell e injecao de comando.
+# de um bloco run. Ele trafega por arquivo e por env.
 
 on:
   workflow_call:
@@ -60,7 +65,7 @@ jobs:
           ISSUE: ${{ inputs.issue_number }}
         run: |
           set -euo pipefail
-          gh issue view "$ISSUE" --repo "$REPO" --json title,body > issue.json
+          gh api "repos/$REPO/issues/$ISSUE" > issue.json
           jq -r '.title + "\n" + (.body // "")' issue.json > issue.txt
           echo "--- conteudo lido da issue ---"
           cat issue.txt
@@ -71,7 +76,6 @@ jobs:
           set -euo pipefail
           MAP=.platform/config/capability-map.yml
 
-          # normaliza: minusculas e sem acento, para o match de keyword
           tr '[:upper:]' '[:lower:]' < issue.txt \
             | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null > norm.txt || \
             tr '[:upper:]' '[:lower:]' < issue.txt > norm.txt
@@ -97,7 +101,6 @@ jobs:
             done
           done
 
-          # regras de propagacao
           IN=$(yq -r '.implies | length' "$MAP")
           for i in $(seq 0 $((IN-1))); do
             WHEN=$(yq -r ".implies[$i].when" "$MAP")
@@ -163,7 +166,13 @@ jobs:
           } > comment.md
 
           cat comment.md
-          gh issue comment "$ISSUE" --repo "$REPO" --body-file comment.md
-          gh issue edit "$ISSUE" --repo "$REPO" \
-            --add-label "estado/aguardando-escopo" \
-            --remove-label "estado/novo" || true
+
+          # REST puro (evita a mutation GraphQL addComment, que fine-grained
+          # PAT nao suporta de forma confiavel)
+          jq -Rs '{body: .}' comment.md > payload.json
+          gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+
+          gh api "repos/$REPO/issues/$ISSUE/labels" \
+            -f "labels[]=estado/aguardando-escopo" >/dev/null
+
+          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Fnovo" >/dev/null 2>&1 || true
