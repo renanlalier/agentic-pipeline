@@ -123,11 +123,11 @@ jobs:
           echo "--- escopo proposto ---"
           cat matched.txt
 
-      - name: Executar o papel lead-swe
+      - name: Executar o papel tech-lead
         id: agent
         uses: ./.platform/actions/run-agent
         with:
-          role: lead-swe
+          role: tech-lead
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ inputs.execution_id }}
