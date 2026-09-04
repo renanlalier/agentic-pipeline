@@ -1,55 +1,26 @@
-version: 1
-
-# O agente Tech Lead consulta este mapa para PROPOR quais repos a demanda
-# atinge. A proposta vai para aprovacao humana (HITL 1) antes de virar
-# sub-issue. Quando o agente erra o escopo, corrige-se ESTE arquivo - nao
-# o prompt.
-#
-# O campo `role` referencia um papel GENERALISTA (agents/<role>/system.md).
-# A capacidade de stack de cada repo vem das skills carregadas em runtime,
-# nao do nome do papel - por isso app-poc-1 (React) e app-poc-2 (Kotlin)
-# usam papeis diferentes em stack mas o mesmo papel logico por funcao.
-
+version: 2
 owner: renanlalier
 
-domains:
-  - name: interface-usuario
-    description: "telas, componentes, navegacao e estados da UI (React)"
-    repos:
-      - name: app-poc-1
-        role: frontend-engineer
-        owner_team: time-frontend
-        stack: react
-        typical_changes: [componente, tela, navegacao, validacao de formulario]
-    keywords:
-      - tela
-      - botao
-      - formulario
-      - login
-      - navegacao
-      - componente
-      - interface
-      - usuario ve
-      - mensagem de erro
+# Isto e uma lista de GOVERNANCA - quais repos a pipe tem permissao de
+# tocar, e quem e dono de cada um. NAO e mais um dicionario de
+# palavras-chave: a decisao de quais repos uma demanda afeta e feita
+# pelo agente Tech Lead, lendo a descricao e o README REAIS de cada
+# repo (buscados via API do GitHub em runtime), com julgamento
+# semantico - nao por match literal de string.
+#
+# `summary` aqui e um resumo de dominio dado pela platform, para o
+# agente cruzar com o que ele encontrar ao vivo no GitHub. Nao e usado
+# para grep.
 
-  - name: contratos-e-dados
-    description: "API, contratos e regras de negocio (Kotlin/Ktor)"
-    repos:
-      - name: app-poc-2
-        role: backend-engineer
-        owner_team: time-backend
-        stack: kotlin-ktor
-        typical_changes: [rota, endpoint, validacao, contrato de resposta]
-    keywords:
-      - api
-      - endpoint
-      - contrato
-      - schema
-      - banco
-      - autenticacao
-      - token
-      - sessao
-      - validacao no servidor
+repos:
+  - name: app-poc-1
+    role: frontend-engineer
+    owner_team: time-frontend
+    summary: "Interface do usuario - telas, componentes, navegacao, formularios."
+  - name: app-poc-2
+    role: backend-engineer
+    owner_team: time-backend
+    summary: "API e regras de negocio - rotas, contratos, autenticacao, persistencia."
 
 # Regras de propagacao: se um repo entra no escopo, outro provavelmente entra junto.
 implies:
@@ -58,7 +29,8 @@ implies:
     reason: "mudanca de contrato quase sempre exige acompanhamento na UI"
     requires: expand-contract
 
-# Repos que nunca entram no escopo automatico.
+# Repos que nunca entram no escopo automatico, mesmo que a demanda os
+# mencione.
 excluded:
   - name: poc-agentic-platform
     reason: "a pipe nao se modifica a si mesma dentro de uma demanda"
