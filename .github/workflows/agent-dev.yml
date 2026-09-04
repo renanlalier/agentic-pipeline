@@ -41,12 +41,12 @@ jobs:
       issues: write
     steps:
       - name: Checkout deste repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Checkout da platform
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: renanlalier/poc-agentic-platform
           ref: v1
@@ -81,10 +81,12 @@ jobs:
           fi
 
       - name: Criar branch de trabalho
+        env:
+          EXEC_ID: ${{ inputs.execution_id }}
         run: |
           git config user.name  "agentic-${{ inputs.role }}"
           git config user.email "agentic@users.noreply.github.com"
-          git checkout -b "agentic/${{ inputs.execution_id }}"
+          git checkout -b "agentic/$EXEC_ID"
 
       - name: Executar o papel
         id: agent
@@ -98,54 +100,80 @@ jobs:
           platform_path: .platform
 
       - name: Materializar a alteracao
+        env:
+          EXEC_ID: ${{ inputs.execution_id }}
+          ROLE: ${{ inputs.role }}
+          CLI: ${{ steps.agent.outputs.cli }}
+          MODEL: ${{ steps.agent.outputs.model }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+          CONTRACT_REF: ${{ inputs.contract_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           {
-            echo "## ${{ inputs.execution_id }}"
+            echo "## $EXEC_ID"
             echo ""
-            echo "- papel: \`${{ inputs.role }}\`"
-            echo "- cli: \`${{ steps.agent.outputs.cli }}\`"
-            echo "- modelo: \`${{ steps.agent.outputs.model }}\`"
-            echo "- sub-issue: #${{ inputs.sub_issue }}"
-            echo "- contrato: \`${{ inputs.contract_ref }}\`"
-            echo "- run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "- papel: \`$ROLE\`"
+            echo "- cli: \`$CLI\`"
+            echo "- modelo: \`$MODEL\`"
+            echo "- sub-issue: #$SUB_ISSUE"
+            echo "- contrato: \`$CONTRACT_REF\`"
+            echo "- run: $RUN_URL"
             echo ""
           } >> CHANGELOG-agentic.md
 
           git add CHANGELOG-agentic.md
-          git commit -m "feat: ${{ inputs.role }} para #${{ inputs.sub_issue }} (exec ${{ inputs.execution_id }})"
-          git push origin "agentic/${{ inputs.execution_id }}"
+          git commit -m "feat: $ROLE para #$SUB_ISSUE (exec $EXEC_ID)"
+          git push origin "agentic/$EXEC_ID"
 
-      - name: Abrir pull request em draft
+      - name: Abrir pull request em draft (REST)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EXEC_ID: ${{ inputs.execution_id }}
+          ROLE: ${{ inputs.role }}
+          CLI: ${{ steps.agent.outputs.cli }}
+          MODEL: ${{ steps.agent.outputs.model }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+          CONTRACT_REF: ${{ inputs.contract_ref }}
         run: |
           set -euo pipefail
-          gh pr create --draft \
-            --title "[agentic] ${{ inputs.role }} — sub-issue #${{ inputs.sub_issue }}" \
-            --body "$(cat <<EOF
-          Gerado pela pipe agentica.
+          {
+            echo "Gerado pela pipe agentica."
+            echo ""
+            echo "| campo | valor |"
+            echo "|---|---|"
+            echo "| execution_id | \`$EXEC_ID\` |"
+            echo "| papel | \`$ROLE\` |"
+            echo "| cli | \`$CLI\` |"
+            echo "| modelo | \`$MODEL\` |"
+            echo "| contrato | \`$CONTRACT_REF\` |"
+            echo ""
+            echo "Closes #$SUB_ISSUE"
+            echo ""
+            echo "---"
+            echo "**HITL 2** — este PR precisa de review humano. O App que abriu nao pode aprovar."
+          } > pr_body.md
 
-          | campo | valor |
-          |---|---|
-          | execution_id | \`${{ inputs.execution_id }}\` |
-          | papel | \`${{ inputs.role }}\` |
-          | cli | \`${{ steps.agent.outputs.cli }}\` |
-          | modelo | \`${{ steps.agent.outputs.model }}\` |
-          | contrato | \`${{ inputs.contract_ref }}\` |
+          jq -n \
+            --arg title "[agentic] $ROLE — sub-issue #$SUB_ISSUE" \
+            --rawfile body pr_body.md \
+            --arg head "agentic/$EXEC_ID" \
+            --arg base "main" \
+            '{title: $title, body: $body, head: $head, base: $base, draft: true}' \
+            > pr_payload.json
 
-          Closes #${{ inputs.sub_issue }}
+          gh api "repos/$REPO/pulls" --input pr_payload.json > pr.json
+          echo "PR criado: $(jq -r .html_url pr.json)"
 
-          ---
-          **HITL 2** — este PR precisa de review humano. O App que abriu nao pode aprovar.
-          EOF
-          )" \
-            --head "agentic/${{ inputs.execution_id }}" \
-            --base main
-
-      - name: Reportar na sub-issue
+      - name: Reportar na sub-issue (REST)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh issue comment ${{ inputs.sub_issue }} --repo ${{ github.repository }} \
-            --body "Implementacao concluida em \`${{ github.repository }}\`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          set -euo pipefail
+          MSG="Implementacao concluida em \`$REPO\`. Run: $RUN_URL"
+          jq -n --arg body "$MSG" '{body: $body}' > comment_payload.json
+          gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input comment_payload.json
