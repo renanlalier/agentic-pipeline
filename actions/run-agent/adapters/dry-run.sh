@@ -11,15 +11,10 @@
 # Este adapter usa o fallback de selecao por keyword (lib/skills.sh) para
 # DEMONSTRAR o mecanismo de carregamento sob demanda, sem custo de token.
 #
-# Para o papel tech-lead: proposta conservadora (todos os repos do
-# fingerprint), ver comentario mais abaixo.
-#
-# Para o papel po: SEM MODELO REAL nao ha como conduzir um brainstorming
-# de verdade - o dry-run so consegue detectar uma palavra de aprovacao
-# no texto acumulado e, na ausencia dela, devolver uma pergunta enlatada.
-# Isso prova a MECANICA do loop (pergunta -> comentario -> pergunta de
-# novo -> aprovacao -> escopo preenchido), nao a qualidade do
-# refinamento. Com CLI real (cursor/codex) o comportamento muda.
+# LIMITACAO GERAL: sem modelo real, nenhum dos loops abaixo (po/brainstorm,
+# engineer/planejamento) faz julgamento de verdade - so detecta uma
+# palavra de aprovacao no texto acumulado. Prova a MECANICA do loop, nao
+# a qualidade da decisao. Com CLI real (cursor/codex) o comportamento muda.
 set -euo pipefail
 
 : "${ROLE:?}"
@@ -47,23 +42,19 @@ if [ -f "${MCP_CONFIG:-}" ]; then
 fi
 
 N_SKILLS=$(echo "$SELECTED_SKILLS" | grep -c '^## \[skill:' || true)
+APPROVAL_REGEX='aprovad[oa]|aprovo\b|approved|pode seguir'
 
 case "$ROLE" in
   po)
-    # Deteccao simplissima de aprovacao: qualquer ocorrencia de uma
-    # palavra de aprovacao no texto acumulado (demanda + comentarios).
-    # Limitacao conhecida: nao distingue "aprovado" dito de passagem na
-    # demanda original de uma aprovacao real do humano a um design
-    # apresentado - um modelo real faz essa distincao, o dry-run nao.
-    if echo "$PROMPT_NORM" | grep -qE 'aprovad[oa]|aprovo\b|approved|pode seguir'; then
+    # Loop de brainstorming (issue pai). Ver skill brainstorming.
+    if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
       DEMANDA=$(echo "$PROMPT" | awk '/^## Demanda original/{c=1;next} /^## Conversa/{c=0} c')
       ESCOPO="[modo dry-run - escopo aproximado, nao e julgamento real de design]
 
 $(echo "$DEMANDA" | sed '/^$/d')"
 
       jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
-        --arg escopo "$ESCOPO" \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg escopo "$ESCOPO" \
         '{
           role: $role, execution_id: $exec_id, status: "approved",
           question: "", escopo: $escopo,
@@ -75,12 +66,11 @@ $(echo "$DEMANDA" | sed '/^$/d')"
       if [ "$N_HUMANO" -eq 0 ]; then
         QUESTION="[pergunta enlatada de dry-run] Qual comportamento exato deve mudar, do ponto de vista de quem usa o sistema?"
       else
-        QUESTION="[pergunta enlatada de dry-run] Ha alguma restricao ou algo que NAO deve mudar (non-goal) que devemos deixar explicito? Se nao houver mais nada em aberto, comente 'aprovado'."
+        QUESTION="[pergunta enlatada de dry-run] Ha alguma restricao ou algo que NAO deve mudar (non-goal)? Se nao houver mais nada em aberto, comente 'aprovado'."
       fi
 
       jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
-        --arg question "$QUESTION" \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg question "$QUESTION" \
         '{
           role: $role, execution_id: $exec_id, status: "ask",
           question: $question, escopo: "",
@@ -108,32 +98,64 @@ $(echo "$DEMANDA" | sed '/^$/d')"
     echo "repos encontrados no fingerprint (modo dry-run, sem julgamento): $N_FOUND" >&2
 
     jq -n \
-      --arg role "$ROLE" \
-      --arg exec_id "$EXECUTION_ID" \
-      --argjson repos "$REPOS_JSON" \
-      --arg n_skills "$N_SKILLS" \
+      --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --argjson repos "$REPOS_JSON" --arg n_skills "$N_SKILLS" \
       '{
-        role: $role,
-        execution_id: $exec_id,
-        status: "ok",
+        role: $role, execution_id: $exec_id, status: "ok",
         summary: ("Proposta conservadora em modo dry-run (" + ($repos | length | tostring) + " repo(s) do fingerprint, " + $n_skills + " skill(s) carregada(s) por keyword)"),
-        repos: $repos,
-        contract_ref: "v1",
+        repos: $repos, contract_ref: "v1",
         notes: "adapter dry-run nao tem julgamento semantico - roda com CLI real (cursor/codex) para uma proposta que de fato analisa o fingerprint de cada repo"
       }'
     ;;
+
   frontend-engineer|backend-engineer)
-    cat <<JSON
+    if echo "$PROMPT" | grep -q 'MODO: PLANEJAMENTO_ITERATIVO'; then
+      # Loop de detalhamento tecnico (sub-issue). Ver skill writing-plans.
+      if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
+        jq -n \
+          --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
+          '{
+            role: $role, execution_id: $exec_id, status: "approved",
+            kind: "", content: "",
+            notes: "adapter dry-run: aprovacao detectada por texto, nao e julgamento real"
+          }'
+      else
+        N_PIPE=$(echo "$PROMPT" | grep -c '\[PIPE\]' || true)
+        if [ "$N_PIPE" -eq 0 ]; then
+          KIND="plan"
+          CONTENT="[plano enlatado de dry-run]
+1. Mapear o arquivo principal que a sub-issue afeta neste repositorio.
+2. Implementar a mudanca descrita, seguindo o padrao ja existente no repo.
+3. Escrever/atualizar teste cobrindo o comportamento novo.
+
+Aprove comentando 'aprovado', ou pergunte algo antes."
+        else
+          KIND="question"
+          CONTENT="[pergunta enlatada de dry-run] O plano acima cobre o suficiente, ou falta algum caso de borda? Comente 'aprovado' para seguir."
+        fi
+
+        jq -n \
+          --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg kind "$KIND" --arg content "$CONTENT" \
+          '{
+            role: $role, execution_id: $exec_id, status: "ask",
+            kind: $kind, content: $content,
+            notes: "adapter dry-run: conteudo enlatado, nao ha julgamento real sem modelo"
+          }'
+      fi
+    else
+      # Fase de implementacao (apos plano aprovado)
+      cat <<JSON
 {
   "role": "$ROLE",
   "execution_id": "$EXECUTION_ID",
   "status": "ok",
-  "summary": "Fase executada em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword) - a mesma saida generica serve tanto para a fase de detalhamento quanto para a de implementacao neste modo",
+  "summary": "Implementacao simulada em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword)",
   "changed_files": ["CHANGELOG-agentic.md"],
   "notes": "adapter dry-run: nenhuma chamada de modelo foi feita"
 }
 JSON
+    fi
     ;;
+
   *)
     cat <<JSON
 {
