@@ -12,19 +12,19 @@ providers:
     data_policy: no-training
 
 clis:
-  cursor:
-    approved: true
-    adapter: adapters/cursor.sh
-  codex:
-    approved: true
-    adapter: adapters/codex.sh
-  claude-code:
-    approved: true
-    adapter: adapters/claude-code.sh
   dry-run:
     approved: true
-    adapter: adapters/dry-run.sh
+    adapter: actions/run-agent/adapters/dry-run.sh
     notes: "adapter de POC - nao chama modelo, simula a saida do papel"
+  cursor:
+    approved: true
+    adapter: actions/run-agent/adapters/cursor.sh
+  codex:
+    approved: true
+    adapter: actions/run-agent/adapters/codex.sh
+  claude-code:
+    approved: true
+    adapter: actions/run-agent/adapters/claude-code.sh
 
 models:
   po:            [dry-run, claude-sonnet-4-6, gpt-5-mini]
