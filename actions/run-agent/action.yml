@@ -1,14 +1,14 @@
 name: run-agent
 description: >
-  Resolve CLI e modelo (nivel 3 -> 2 -> 1), valida contra a allowlist,
-  localiza o contrato do papel (system sagrado + skills descobriveis) e
-  os MCPs abstratos, e delega tudo ao adapter do CLI escolhido. A action
-  NAO concatena skills nem instala MCP - cada adapter faz isso do jeito
-  proprio do seu CLI.
+  Resolves CLI and model (level 3 -> 2 -> 1), validates against the allowlist,
+  locates the role contract (sacred system + discoverable skills) and the
+  abstract MCPs, and delegates everything to the chosen CLI adapter. This
+  action does NOT concatenate skills or install MCPs — each adapter does that
+  in its own CLI-native way.
 
 inputs:
   role:
-    description: "Papel logico a executar (po, tech-lead, frontend-engineer, ...)"
+    description: "Logical role to execute (po, tech-lead, frontend-engineer, ...)"
     required: true
   cli_override:
     required: false
@@ -19,7 +19,7 @@ inputs:
   execution_id:
     required: true
   prompt:
-    description: "A TAREFA. Vem da issue. Nunca e misturado ao system."
+    description: "THE TASK. Comes from the issue. Never mixed into the system."
     required: true
   platform_path:
     required: false
@@ -36,7 +36,16 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Resolver configuracao (nivel 3 -> 2 -> 1)
+    - name: Install yq
+      shell: bash
+      run: |
+        if ! command -v yq &>/dev/null; then
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+        fi
+
+    - name: Resolve configuration (level 3 -> 2 -> 1)
       id: resolve
       shell: bash
       run: |
@@ -57,13 +66,13 @@ runs:
 
         APPROVED=$(yq -r ".clis.\"$CLI\".approved // false" "$PLAT/config/allowlist.yml")
         if [ "$APPROVED" != "true" ]; then
-          echo "::error::CLI '$CLI' nao esta aprovado na allowlist (nivel 1)"
+          echo "::error::CLI '$CLI' is not approved in the allowlist (level 1)"
           exit 1
         fi
 
         ALLOWED=$(yq -r ".models.\"$ROLE\" | contains([\"$MODEL\"])" "$PLAT/config/allowlist.yml")
         if [ "$ALLOWED" != "true" ]; then
-          echo "::error::Modelo '$MODEL' nao permitido para o papel '$ROLE'"
+          echo "::error::Model '$MODEL' is not allowed for role '$ROLE'"
           exit 1
         fi
 
@@ -71,15 +80,15 @@ runs:
         echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
         echo "### run-agent" >> "$GITHUB_STEP_SUMMARY"
-        echo "| campo | valor |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| field | value |" >> "$GITHUB_STEP_SUMMARY"
         echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-        echo "| papel | \`$ROLE\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| role | \`$ROLE\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| cli | \`$CLI\` |" >> "$GITHUB_STEP_SUMMARY"
-        echo "| modelo | \`$MODEL\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| model | \`$MODEL\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Localizar o contrato do papel
+    - name: Locate role contract
       id: agent_dir
       shell: bash
       run: |
@@ -87,35 +96,35 @@ runs:
         PLAT="${{ inputs.platform_path }}"
         ROLE="${{ inputs.role }}"
 
-        SYSTEM_FILE="$PLAT/agents/$ROLE/system.md"
+        SYSTEM_FILE="$PLAT/brain/prompts/$ROLE/system.md"
         if [ ! -f "$SYSTEM_FILE" ]; then
-          echo "::error::System prompt nao encontrado: $SYSTEM_FILE. Todo papel precisa de um."
+          echo "::error::System prompt not found: $SYSTEM_FILE. Every role requires one."
           exit 1
         fi
 
-        PLATFORM_SKILLS_DIR="$PLAT/agents/$ROLE/skills"
+        PLATFORM_SKILLS_DIR="$PLAT/brain/skills"
         REPO_SKILLS_DIR=".agentic/skills"
 
         echo "system_file=$SYSTEM_FILE" >> "$GITHUB_OUTPUT"
         echo "platform_skills_dir=$PLATFORM_SKILLS_DIR" >> "$GITHUB_OUTPUT"
         echo "repo_skills_dir=$REPO_SKILLS_DIR" >> "$GITHUB_OUTPUT"
 
-        # Nem todo repo consumidor tem .agentic/skills (ex: o repo de
-        # intake nao tem). `find` num diretorio inexistente retorna erro,
-        # e sob pipefail isso mata o script mesmo com o wc/tr seguintes
-        # ok - por isso o guard explicito de existencia antes.
+        # Not every consumer repo has .agentic/skills (e.g. the intake repo
+        # does not). `find` on a non-existent directory returns an error, and
+        # under pipefail that kills the script even with the wc/tr following
+        # successfully — hence the explicit existence guard.
         N_PLAT=0
         [ -d "$PLATFORM_SKILLS_DIR" ] && N_PLAT=$(find "$PLATFORM_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
         N_REPO=0
         [ -d "$REPO_SKILLS_DIR" ] && N_REPO=$(find "$REPO_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 
         echo "" >> "$GITHUB_STEP_SUMMARY"
-        echo "**Contrato localizado:**" >> "$GITHUB_STEP_SUMMARY"
-        echo "- system: \`$SYSTEM_FILE\` (sagrado, so platform)" >> "$GITHUB_STEP_SUMMARY"
-        echo "- skills disponiveis: $N_PLAT da platform, $N_REPO do repo" >> "$GITHUB_STEP_SUMMARY"
-        echo "- carregamento sob demanda: responsabilidade do adapter de cada CLI" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Contract located:**" >> "$GITHUB_STEP_SUMMARY"
+        echo "- system: \`$SYSTEM_FILE\` (sacred, platform-only)" >> "$GITHUB_STEP_SUMMARY"
+        echo "- available skills: $N_PLAT from platform, $N_REPO from repo" >> "$GITHUB_STEP_SUMMARY"
+        echo "- on-demand loading: each CLI adapter's responsibility" >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Emitir headers de atribuicao
+    - name: Emit attribution headers
       shell: bash
       run: |
         echo "x-execution-id: ${{ inputs.execution_id }}"
@@ -125,7 +134,7 @@ runs:
         echo "x-model: ${{ steps.resolve.outputs.model }}"
         echo "x-repo: ${{ github.repository }}"
 
-    - name: Despachar para o adapter
+    - name: Dispatch to adapter
       id: dispatch
       shell: bash
       env:
@@ -137,7 +146,7 @@ runs:
         SYSTEM_FILE: ${{ steps.agent_dir.outputs.system_file }}
         PLATFORM_SKILLS_DIR: ${{ steps.agent_dir.outputs.platform_skills_dir }}
         REPO_SKILLS_DIR: ${{ steps.agent_dir.outputs.repo_skills_dir }}
-        MCP_CONFIG: ${{ inputs.platform_path }}/mcp/servers.yml
+        MCP_CONFIG: ${{ inputs.platform_path }}/brain/mcp/servers.yml
         CONTEXT7_API_KEY: ${{ env.CONTEXT7_API_KEY }}
       run: |
         set -euo pipefail

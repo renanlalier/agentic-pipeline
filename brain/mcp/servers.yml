@@ -1,0 +1,25 @@
+version: 1
+
+# Abstract description of available MCPs. Each adapter (cursor.sh, codex.sh,
+# claude-code.sh) translates this into the installation mechanism native to
+# its CLI — none of them share the same native config format.
+
+servers:
+  context7:
+    description: >
+      Resolves library names to IDs and fetches up-to-date, version-specific
+      documentation and code examples. Prevents the agent from hallucinating
+      outdated library APIs.
+    remote:
+      transport: http
+      url: https://mcp.context7.com/mcp
+      # OPTIONAL. Context7 works without a key (basic rate limit). The key
+      # only raises the limit — it is not required for the POC.
+      # If CONTEXT7_API_KEY is set in the job environment, adapters send it;
+      # if not, they connect with no header.
+      api_key_header: CONTEXT7_API_KEY
+      api_key_env: CONTEXT7_API_KEY
+    local_fallback:
+      # used only if the adapter prefers stdio over remote HTTP
+      command: npx
+      args: ["-y", "@upstash/context7-mcp"]

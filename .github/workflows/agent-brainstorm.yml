@@ -1,25 +1,25 @@
 name: agent-brainstorm (reusable)
 
-# Roda no repo de INTAKE, duas vezes ou mais por demanda: quando a issue
-# abre, e de novo a cada comentario humano enquanto o dialogo nao fechou.
-# Usa o papel PO + skill brainstorming (adaptada de obra/superpowers).
+# Runs in the INTAKE repo, two or more times per demand: when the issue
+# opens, and again for each human comment while the dialogue is still open.
+# Uses the PO role + brainstorming skill (adapted from obra/superpowers).
 #
-# status "ask"      -> posta a pergunta, mantem estado/brainstorming
-# status "approved" -> preenche a secao ## Escopo no corpo da issue,
-#                      muda para estado/escopo-definido (o on-issue.yml
-#                      do caller escuta essa label para disparar o
-#                      agent-lead existente, que propoe os repos)
-# status "escalated" -> posta o motivo e para (numero de rodadas estourou
-#                      ou o humano pediu para cancelar)
+# status "ask"      -> posts the question, keeps status-brainstorming
+# status "approved" -> fills the ## Scope section in the issue body,
+#                      changes to status-scope-defined (the caller's
+#                      on-issue.yml listens for this label to trigger
+#                      agent-lead, which proposes affected repos)
+# status "escalated" -> posts the reason and stops (round count exceeded
+#                       or human asked to cancel)
 #
-# IMPORTANTE: como a autenticacao usa PAT pessoal (nao um GitHub App
-# bot), todo comentario postado pela pipe aparece com o MESMO usuario
-# de quem abriu a issue - nao da para distinguir por login. Por isso
-# todo comentario que este workflow posta carrega o marcador HTML
-# invisivel <!-- pipe:brainstorm --> no final, e o caller (on-issue.yml)
-# usa esse marcador para NAO re-disparar o brainstorm quando o proprio
-# comentario da pipe chega via issue_comment.created. Sem isso, a pipe
-# entraria em loop respondendo a si mesma.
+# IMPORTANT: because authentication uses a personal PAT (not a GitHub App
+# bot), every comment posted by the pipeline appears under the SAME user
+# who opened the issue — there is no way to distinguish by login. For this
+# reason every comment this workflow posts carries the invisible HTML marker
+# <!-- pipe:brainstorm --> at the end, and the caller (on-issue.yml) uses
+# that marker to NOT re-trigger brainstorm when the pipeline's own comment
+# arrives via issue_comment.created. Without this, the pipeline would loop
+# replying to itself.
 
 on:
   workflow_call:
@@ -51,15 +51,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Checkout da platform
+      - name: Checkout platform
         uses: actions/checkout@v5
         with:
           repository: renanlalier/poc-agentic-platform
           ref: v1
           path: .platform
 
-      - name: Montar a conversa (issue + comentarios ate agora)
-        id: contexto
+      - name: Build conversation (issue + comments so far)
+        id: context
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -75,32 +75,32 @@ jobs:
 
           {
             echo "prompt<<PROMPTEOF"
-            echo "## Demanda original"
+            echo "## Original demand"
             echo "$TITLE"
             echo ""
             echo "$BODY"
             echo ""
             if [ "$N" -gt 0 ]; then
-              echo "## Conversa ate agora ($N comentario(s), em ordem)"
-              echo "Comentarios marcados com [PIPE] sao seus proprios turnos"
-              echo "anteriores; os demais sao do humano."
-              jq -r '.[] | (if (.body | contains("<!-- pipe:brainstorm -->")) then "**[PIPE]**" else "**[HUMANO] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
+              echo "## Conversation so far ($N comment(s), in order)"
+              echo "Comments marked with [PIPE] are your own previous turns;"
+              echo "the others are from the human."
+              jq -r '.[] | (if (.body | contains("<!-- pipe:brainstorm -->")) then "**[PIPE]**" else "**[HUMAN] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
             else
-              echo "## Conversa ate agora"
-              echo "(nenhum comentario ainda - este e o primeiro turno)"
+              echo "## Conversation so far"
+              echo "(no comments yet — this is the first turn)"
             fi
             echo ""
-            echo "## Instrucao"
-            echo "Aplique a skill brainstorming. Se ainda faltar clareza, faca"
-            echo "UMA pergunta. Se o ultimo comentario HUMANO aprovou um escopo"
-            echo "que voce mesmo apresentou num turno [PIPE] anterior, conclua"
-            echo "com status approved e preencha o campo escopo."
+            echo "## Instruction"
+            echo "Apply the brainstorming skill. If clarity is still missing, ask"
+            echo "ONE question. If the last HUMAN comment approved a scope that"
+            echo "you yourself presented in a prior [PIPE] turn, conclude with"
+            echo "status approved and fill the scope field."
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
 
-          echo "rodadas de comentario ate agora: $N"
+          echo "comment rounds so far: $N"
 
-      - name: Executar o papel po
+      - name: Execute PO role
         id: agent
         uses: ./.platform/actions/run-agent
         with:
@@ -108,10 +108,10 @@ jobs:
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ inputs.execution_id }}
-          prompt: ${{ steps.contexto.outputs.prompt }}
+          prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
 
-      - name: Agir sobre a decisao do PO
+      - name: Act on PO decision
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -124,11 +124,11 @@ jobs:
           ${{ steps.agent.outputs.result }}
           RESULTEOF
 
-          echo "--- saida do PO ---"
+          echo "--- PO output ---"
           cat agent_result.json
 
           if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::Saida do agente PO nao e JSON valido."
+            echo "::error::PO agent output is not valid JSON."
             exit 1
           fi
 
@@ -141,27 +141,27 @@ jobs:
                 echo "$QUESTION"
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming_"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: brainstorming_"
                 echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=estado/brainstorming" >/dev/null
+                -f "labels[]=status-brainstorming" >/dev/null
               ;;
 
             approved)
-              ESCOPO=$(jq -r '.escopo' agent_result.json)
+              SCOPE=$(jq -r '.scope' agent_result.json)
 
-              # substitui o placeholder "## Escopo" do body pela versao
-              # preenchida - reusa issue.json ja salvo no passo anterior
+              # replace the "## Scope" placeholder in the body with the filled version
+              # reuses issue.json already saved in the previous step
               CURRENT_BODY=$(jq -r '.body // ""' issue.json)
-              NEW_BODY=$(awk -v escopo="$ESCOPO" '
+              NEW_BODY=$(awk -v scope="$SCOPE" '
                 BEGIN{done=0}
-                /^## Escopo/{
+                /^## Scope/{
                   print; print "";
-                  print escopo;
+                  print scope;
                   skip=1; done=1; next
                 }
                 skip && /^## /{ skip=0 }
@@ -173,30 +173,29 @@ jobs:
               gh api -X PATCH "repos/$REPO/issues/$ISSUE" --input body_payload.json
 
               {
-                echo "**Escopo definido a partir da conversa.** Encaminhando para"
-                echo "proposta de repositorios afetados."
+                echo "**Scope defined from the conversation.** Forwarding for proposal of affected repositories."
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming concluido_"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: brainstorming concluded_"
                 echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=estado/escopo-definido" >/dev/null
-              gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Fbrainstorming" >/dev/null 2>&1 || true
+                -f "labels[]=status-scope-defined" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-brainstorming" >/dev/null 2>&1 || true
               ;;
 
             escalated)
               NOTES=$(jq -r '.notes' agent_result.json)
               {
-                echo "## PO escalou esta demanda"
+                echo "## PO escalated this demand"
                 echo ""
                 echo "$NOTES"
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)_"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)_"
                 echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
@@ -205,7 +204,7 @@ jobs:
               ;;
 
             *)
-              echo "::error::Status desconhecido retornado pelo PO: $STATUS"
+              echo "::error::Unknown status returned by PO: $STATUS"
               exit 1
               ;;
           esac

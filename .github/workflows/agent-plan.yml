@@ -1,22 +1,23 @@
 name: agent-plan (reusable)
 
-# Roda DENTRO do repo de produto, sobre a SUB-ISSUE. Uma ou mais vezes:
-# na criacao da sub-issue, e de novo a cada comentario humano enquanto
-# o plano nao foi aprovado. Usa o mesmo papel do repo (frontend-engineer
-# ou backend-engineer) + skill writing-plans (com a secao de iteracao).
+# Runs INSIDE the product repo, on the SUB-ISSUE. One or more times:
+# on sub-issue creation, and again for each human comment while the plan
+# has not been approved. Uses the repo's own role (frontend-engineer or
+# backend-engineer) + the writing-plans skill (with the iteration section).
 #
-# status "ask"      -> posta pergunta OU o plano proposto (kind indica
-#                      qual), mantem estado/detalhamento
-# status "approved" -> marca o ultimo plano publicado como final
-#                      (<!-- pipe:plano-final -->), label plano-aprovado
-#                      (o caller escuta essa label para disparar o
-#                      agent-dev de implementacao)
-# status "escalated" -> posta o motivo e para
+# status "ask"      -> posts a question OR the proposed plan (kind indicates
+#                      which), keeps status-planning
+# status "approved" -> marks the last published plan as final
+#                      (<!-- pipe:plan-final -->), adds plan-approved label
+#                      (the caller listens for this label to trigger
+#                      agent-dev for implementation), and fills the
+#                      ## Technical Scope section in the sub-issue body
+# status "escalated" -> posts the reason and stops
 #
-# execution_id e OPCIONAL aqui: no primeiro turno vem do payload do
-# dispatch; nos turnos seguintes (disparados por comentario, sem
-# payload) e recuperado da label "execution:<id>" que o agent-fanout
-# aplicou na sub-issue no momento em que a criou.
+# execution_id is OPTIONAL here: on the first turn it comes from the
+# dispatch payload; on subsequent turns (triggered by comment, with no
+# payload) it is recovered from the "execution:<id>" label that
+# agent-fanout applied to the sub-issue when it created it.
 
 on:
   workflow_call:
@@ -51,16 +52,16 @@ jobs:
       issues: write
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Checkout da platform
-        uses: actions/checkout@v5
+      - name: Checkout platform
+        uses: actions/checkout@v4
         with:
           repository: renanlalier/poc-agentic-platform
           ref: v1
           path: .platform
 
-      - name: Resolver execution_id (input ou label da sub-issue)
+      - name: Resolve execution_id (input or sub-issue label)
         id: exec
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,14 +75,14 @@ jobs:
               | grep '^execution:' | sed 's/^execution://' | head -1 || true)
           fi
           if [ -z "$EXEC_ID" ]; then
-            echo "::error::execution_id nao veio no input e nao ha label execution:* na sub-issue."
+            echo "::error::execution_id was not provided as input and no execution:* label exists on the sub-issue."
             exit 1
           fi
           echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
-          echo "resolvido: $EXEC_ID"
+          echo "resolved: $EXEC_ID"
 
-      - name: Montar a conversa (sub-issue + comentarios ate agora)
-        id: contexto
+      - name: Build conversation (sub-issue + comments so far)
+        id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -95,43 +96,44 @@ jobs:
           gh api "repos/$REPO/issues/$SUB_ISSUE/comments" > comments.json
           N=$(jq 'length' comments.json)
 
+          DELIM=$(openssl rand -hex 16)
           {
-            echo "prompt<<PROMPTEOF"
-            echo "MODO: PLANEJAMENTO_ITERATIVO"
+            echo "prompt<<$DELIM"
+            echo "MODE: ITERATIVE_PLANNING"
             echo ""
             echo "## Sub-issue"
             echo "$TITLE"
             echo ""
             echo "$BODY"
             echo ""
-            echo "## Contrato de referencia"
+            echo "## Reference contract"
             echo "${{ inputs.contract_ref }}"
             echo ""
             if [ "$N" -gt 0 ]; then
-              echo "## Conversa ate agora ($N comentario(s), em ordem)"
-              echo "Comentarios marcados com [PIPE] sao seus proprios turnos"
-              echo "anteriores; os demais sao do humano."
-              jq -r '.[] | (if (.body | contains("<!-- pipe:plano -->")) then "**[PIPE]**" else "**[HUMANO] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
+              echo "## Conversation so far ($N comment(s), in order)"
+              echo "Comments marked with [PIPE] are your own previous turns;"
+              echo "the others are from the human."
+              jq -r '.[] | (if (.body | contains("<!-- pipe:plan -->")) then "**[PIPE]**" else "**[HUMAN] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
             else
-              echo "## Conversa ate agora"
-              echo "(nenhum comentario ainda - este e o primeiro turno)"
+              echo "## Conversation so far"
+              echo "(no comments yet — this is the first turn)"
             fi
             echo ""
-            echo "## Instrucao"
-            echo "Aplique a skill writing-plans, secao de iteracao. Responda"
-            echo "usando ESTE formato para esta chamada (nao o output_format"
-            echo "padrao do seu system.md, que e so para a fase de implementacao):"
+            echo "## Instruction"
+            echo "Apply the writing-plans skill, iteration section. Respond"
+            echo "using THIS format for this call (not the default output_format"
+            echo "from your system.md, which is only for the implementation phase):"
             echo '{"role","execution_id","status":"ask|approved|escalated",'
             echo ' "kind":"question|plan","content","notes"}'
-            echo "Use kind=plan quando content for o plano proposto; kind=question"
-            echo "quando for uma pergunta. status=approved so quando o ultimo"
-            echo "comentario HUMANO aprovar explicitamente um plano [PIPE] anterior."
-            echo "PROMPTEOF"
+            echo "Use kind=plan when content is the proposed plan; kind=question"
+            echo "when it is a question. status=approved only when the last"
+            echo "HUMAN comment explicitly approves a prior [PIPE] plan."
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
-          echo "rodadas de comentario ate agora: $N"
+          echo "comment rounds so far: $N"
 
-      - name: Executar o papel (turno de planejamento)
+      - name: Execute role (planning turn)
         id: agent
         uses: ./.platform/actions/run-agent
         with:
@@ -139,27 +141,26 @@ jobs:
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ steps.exec.outputs.execution_id }}
-          prompt: ${{ steps.contexto.outputs.prompt }}
+          prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
 
-      - name: Agir sobre a decisao do agente
+      - name: Act on agent decision
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SUB_ISSUE: ${{ inputs.sub_issue }}
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENT_RESULT: ${{ steps.agent.outputs.result }}
         run: |
           set -euo pipefail
-          cat <<'RESULTEOF' > agent_result.json
-          ${{ steps.agent.outputs.result }}
-          RESULTEOF
+          printf '%s\n' "$AGENT_RESULT" > agent_result.json
 
-          echo "--- saida do agente ---"
+          echo "--- agent output ---"
           cat agent_result.json
 
           if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::Saida do agente nao e JSON valido."
+            echo "::error::Agent output is not valid JSON."
             exit 1
           fi
 
@@ -170,9 +171,9 @@ jobs:
               KIND=$(jq -r '.kind' agent_result.json)
               CONTENT=$(jq -r '.content' agent_result.json)
               if [ "$KIND" = "plan" ]; then
-                HEADER="## Plano proposto"
+                HEADER="## Proposed plan"
               else
-                HEADER="## Pergunta"
+                HEADER="## Question"
               fi
               {
                 echo "$HEADER"
@@ -180,58 +181,78 @@ jobs:
                 echo "$CONTENT"
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: detalhamento_"
-                echo "<!-- pipe:plano -->"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: planning_"
+                echo "<!-- pipe:plan -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=estado/detalhamento" >/dev/null
+                -f "labels[]=status-planning" >/dev/null
               ;;
 
             approved)
-              # marca o ultimo comentario [PIPE] com "## Plano proposto" como
-              # o plano final, para o agent-dev (implementacao) achar sem
-              # precisar reler a conversa inteira.
+              # mark the last comment with "## Proposed plan" as the final plan,
+              # so agent-dev (implementation) can find it without re-reading the
+              # entire conversation
               LAST_PLAN_ID=$(gh api "repos/$REPO/issues/$SUB_ISSUE/comments" \
-                --jq '[.[] | select(.body | contains("## Plano proposto"))] | last | .id')
+                --jq '[.[] | select(.body | contains("## Proposed plan"))] | last | .id')
 
+              APPROVED_PLAN_CONTENT=""
               if [ -n "$LAST_PLAN_ID" ] && [ "$LAST_PLAN_ID" != "null" ]; then
                 CURRENT=$(gh api "repos/$REPO/issues/comments/$LAST_PLAN_ID" --jq '.body')
-                NEW_BODY="${CURRENT}
-<!-- pipe:plano-final -->"
+                APPROVED_PLAN_CONTENT="$CURRENT"
+                NEW_BODY=$(printf '%s\n<!-- pipe:plan-final -->' "$CURRENT")
                 jq -n --arg body "$NEW_BODY" '{body: $body}' > mark_payload.json
                 gh api -X PATCH "repos/$REPO/issues/comments/$LAST_PLAN_ID" --input mark_payload.json
               else
-                echo "::warning::Nenhum comentario com '## Plano proposto' encontrado para marcar como final."
+                echo "::warning::No comment with '## Proposed plan' found to mark as final."
               fi
 
+              # fill ## Technical Scope in the sub-issue body with the approved plan
+              CURRENT_BODY=$(jq -r '.body // ""' subissue.json)
+              export APPROVED_PLAN_CONTENT
+              NEW_ISSUE_BODY=$(awk '
+                BEGIN{plan=ENVIRON["APPROVED_PLAN_CONTENT"]; done=0}
+                /^## Technical Scope/{
+                  print; print "";
+                  print plan;
+                  skip=1; done=1; next
+                }
+                skip && /^## /{ skip=0 }
+                skip{ next }
+                { print }
+              ' <<< "$CURRENT_BODY")
+
+              jq -n --arg body "$NEW_ISSUE_BODY" '{body: $body}' > body_payload.json
+              gh api -X PATCH "repos/$REPO/issues/$SUB_ISSUE" --input body_payload.json
+              echo "Technical Scope section filled in sub-issue body"
+
               {
-                echo "**Plano aprovado.** Seguindo para implementação."
+                echo "**Plan approved.** Proceeding to implementation."
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: detalhamento concluido_"
-                echo "<!-- pipe:plano -->"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: planning concluded_"
+                echo "<!-- pipe:plan -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=plano-aprovado" >/dev/null
-              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/estado%2Fdetalhamento" >/dev/null 2>&1 || true
+                -f "labels[]=plan-approved" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/status-planning" >/dev/null 2>&1 || true
               ;;
 
             escalated)
               NOTES=$(jq -r '.notes' agent_result.json)
               {
-                echo "## Detalhamento escalado"
+                echo "## Planning escalated"
                 echo ""
                 echo "$NOTES"
                 echo ""
                 echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)_"
-                echo "<!-- pipe:plano -->"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)_"
+                echo "<!-- pipe:plan -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
@@ -239,7 +260,7 @@ jobs:
               ;;
 
             *)
-              echo "::error::Status desconhecido: $STATUS"
+              echo "::error::Unknown status: $STATUS"
               exit 1
               ;;
           esac

@@ -1,16 +1,16 @@
 name: agent-lead (reusable)
 
-# Passo 2-3 do fluxo. Roda no repo de INTAKE.
-# Le a issue, busca o fingerprint REAL de cada repo elegivel (descricao
-# do GitHub + trecho de README) e delega ao agente Tech Lead a decisao
-# de escopo por julgamento semantico - nao por match de keyword.
-# Nao cria sub-issue: isso so acontece depois da aprovacao humana (HITL 1).
+# Steps 2-3 of the flow. Runs in the INTAKE repo.
+# Reads the issue, fetches the REAL fingerprint of each eligible repo
+# (GitHub description + README excerpt) and delegates the scope decision
+# to the Tech Lead agent via semantic judgment — not keyword matching.
+# Does not create sub-issues: that only happens after human approval (HITL 1).
 #
-# NOTA: usamos `gh api` (REST) em vez de `gh issue comment`/`gh issue edit`.
-# Tokens fine-grained tem suporte incompleto a mutations GraphQL.
+# NOTE: we use `gh api` (REST) instead of `gh issue comment`/`gh issue edit`.
+# Fine-grained tokens have incomplete support for GraphQL mutations.
 #
-# NOTA DE SEGURANCA: o texto da issue nunca e interpolado com ${{ }} dentro
-# de um bloco run. Ele trafega por arquivo e por env.
+# SECURITY NOTE: issue text is never interpolated with ${{ }} directly inside
+# a run block. It always travels through a file or an environment variable.
 
 on:
   workflow_call:
@@ -34,30 +34,30 @@ on:
         required: true
 
 jobs:
-  propor-escopo:
+  propose-scope:
     runs-on: ubuntu-latest
     permissions:
       issues: write
       contents: read
     steps:
-      - name: Checkout do repo consumidor
+      - name: Checkout consumer repo
         uses: actions/checkout@v5
 
-      - name: Checkout da platform
+      - name: Checkout platform
         uses: actions/checkout@v5
         with:
           repository: renanlalier/poc-agentic-platform
           ref: v1
           path: .platform
 
-      - name: Instalar yq
+      - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq \
             https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Ler a issue
+      - name: Read the issue
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -66,11 +66,11 @@ jobs:
           set -euo pipefail
           gh api "repos/$REPO/issues/$ISSUE" > issue.json
           jq -r '.title + "\n" + (.body // "")' issue.json > issue.txt
-          echo "--- conteudo lido da issue ---"
+          echo "--- issue content read ---"
           cat issue.txt
 
-      - name: Buscar fingerprint real dos repos elegiveis e montar o prompt
-        id: contexto
+      - name: Fetch real fingerprint of eligible repos and build prompt
+        id: context
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           OWNER: ${{ github.repository_owner }}
@@ -79,7 +79,7 @@ jobs:
           MAP=.platform/config/capability-map.yml
 
           N=$(yq -r '.repos | length' "$MAP")
-          echo "repos elegiveis no capability map: $N"
+          echo "eligible repos in capability map: $N"
 
           : > fingerprints.md
           for i in $(seq 0 $((N-1))); do
@@ -88,44 +88,44 @@ jobs:
             SUMMARY=$(yq -r ".repos[$i].summary" "$MAP")
 
             LIVE=$(gh api "repos/$OWNER/$REPO_NAME" --jq '{description: .description, language: .language}' 2>/dev/null || echo '{}')
-            DESC=$(echo "$LIVE" | jq -r '.description // "sem descricao no GitHub"')
-            LANG=$(echo "$LIVE" | jq -r '.language // "desconhecida"')
+            DESC=$(echo "$LIVE" | jq -r '.description // "no description on GitHub"')
+            LANG=$(echo "$LIVE" | jq -r '.language // "unknown"')
 
             README=$(gh api "repos/$OWNER/$REPO_NAME/readme" --jq '.content' 2>/dev/null \
-              | base64 -d 2>/dev/null | head -c 500 || echo "(sem README)")
+              | base64 -d 2>/dev/null | head -c 500 || echo "(no README)")
 
             {
               echo "### $REPO_NAME"
-              echo "papel logico sugerido: $ROLE"
-              echo "resumo de dominio (capability map): $SUMMARY"
-              echo "descricao no GitHub: $DESC"
-              echo "linguagem principal: $LANG"
-              echo "trecho do README:"
+              echo "suggested logical role: $ROLE"
+              echo "domain summary (capability map): $SUMMARY"
+              echo "GitHub description: $DESC"
+              echo "primary language: $LANG"
+              echo "README excerpt:"
               echo '```'
               echo "$README"
               echo '```'
               echo ""
             } >> fingerprints.md
 
-            echo "fingerprint obtido: $REPO_NAME ($LANG)"
+            echo "fingerprint obtained: $REPO_NAME ($LANG)"
           done
 
           {
             echo "prompt<<PROMPTEOF"
-            echo "Analise a demanda abaixo e proponha quais dos repositorios"
-            echo "elegiveis listados sao afetados, com justificativa especifica"
-            echo "baseada no que voce le na descricao e no README de cada um -"
-            echo "nao em uma lista fixa de palavras-chave."
+            echo "Analyze the demand below and propose which of the listed eligible"
+            echo "repositories are affected, with specific justification based on"
+            echo "what you read in each repository's description and README —"
+            echo "not on a fixed list of keywords."
             echo ""
-            echo "## Demanda"
+            echo "## Demand"
             cat issue.txt
             echo ""
-            echo "## Repositorios elegiveis (fingerprint obtido ao vivo do GitHub)"
+            echo "## Eligible repositories (fingerprint fetched live from GitHub)"
             cat fingerprints.md
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Executar o papel tech-lead
+      - name: Execute tech-lead role
         id: agent
         uses: ./.platform/actions/run-agent
         with:
@@ -133,22 +133,22 @@ jobs:
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ inputs.execution_id }}
-          prompt: ${{ steps.contexto.outputs.prompt }}
+          prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
 
-      - name: Interpretar a decisao do agente
-        id: decisao
+      - name: Interpret agent decision
+        id: decision
         run: |
           set -euo pipefail
           cat <<'RESULTEOF' > agent_result.json
           ${{ steps.agent.outputs.result }}
           RESULTEOF
 
-          echo "--- saida do agente ---"
+          echo "--- agent output ---"
           cat agent_result.json
 
           if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::A saida do agente nao e JSON valido. Veja o log acima."
+            echo "::error::Agent output is not valid JSON. See log above."
             exit 1
           fi
 
@@ -156,16 +156,16 @@ jobs:
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
           if [ "$STATUS" = "escalated" ]; then
-            echo "::warning::Tech Lead escalou em vez de propor escopo. Isso e o stop_condition do system.md agindo - nao um bug."
+            echo "::warning::Tech Lead escalated instead of proposing scope. This is the system.md stop_condition acting — not a bug."
           fi
 
           N_REPOS=$(jq -r '.repos | length' agent_result.json)
           if [ "$STATUS" != "escalated" ] && [ "$N_REPOS" -eq 0 ]; then
-            echo "::error::Agente retornou status ok mas nenhum repositorio proposto. Tratando como escalada."
+            echo "::error::Agent returned status ok but proposed no repositories. Treating as escalation."
             echo "status=escalated" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publicar proposta de escopo na issue
+      - name: Publish scope proposal on the issue
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -173,7 +173,7 @@ jobs:
           EXEC_ID: ${{ inputs.execution_id }}
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
-          STATUS: ${{ steps.decisao.outputs.status }}
+          STATUS: ${{ steps.decision.outputs.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -182,41 +182,44 @@ jobs:
             SUMMARY=$(jq -r '.summary' agent_result.json)
             NOTES=$(jq -r '.notes' agent_result.json)
             {
-              echo "## Tech Lead escalou esta demanda"
+              echo "## Tech Lead escalated this demand"
               echo ""
-              echo "\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)"
+              echo "\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)"
               echo ""
-              echo "**Resumo:** $SUMMARY"
+              echo "**Summary:** $SUMMARY"
               echo ""
-              echo "**Motivo:** $NOTES"
+              echo "**Reason:** $NOTES"
               echo ""
               echo "---"
-              echo "Nenhuma stop condition automatica falhou aqui - o agente"
-              echo "avaliou os repositorios elegiveis e não encontrou correspondência"
-              echo "segura com julgamento suficiente. Refine a demanda e reabra,"
-              echo "ou ajuste \`config/capability-map.yml\` se um repositorio"
-              echo "relevante estiver faltando na lista de elegiveis."
+              echo "No automatic stop condition failed here — the agent evaluated the"
+              echo "eligible repositories and found no safe match with sufficient judgment."
+              echo "Refine the demand and reopen, or adjust \`config/capability-map.yml\`"
+              echo "if a relevant repository is missing from the eligible list."
             } > comment.md
             jq -Rs '{body: .}' comment.md > payload.json
             gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
             exit 1
           fi
 
+          ISSUE_TYPE=$(jq -r '.issue_type // "task"' agent_result.json)
+
           {
-            echo "## Escopo proposto pela pipe"
+            echo "## Scope proposed by the pipeline"
             echo ""
             echo "\`execution_id\`: \`$EXEC_ID\`"
             echo "\`cli\`: \`$CLI\` · \`model\`: \`$MODEL\`"
-            echo "[run desta etapa]($RUN_URL)"
+            echo "[run for this step]($RUN_URL)"
             echo ""
-            echo "| repositorio | papel | por que entrou |"
-            echo "|---|---|---|"
-            jq -r '.repos[] | "| `\(.name)` | `\(.role)` | \(.reason) |"' agent_result.json
+            echo "**Demand type:** \`$ISSUE_TYPE\`"
+            echo ""
+            echo "| repository | role | why included | type |"
+            echo "|---|---|---|---|"
+            jq -r --arg t "$ISSUE_TYPE" '.repos[] | "| `\(.name)` | `\(.role)` | \(.reason) | `\($t)` |"' agent_result.json
             echo ""
             echo "---"
-            echo "**HITL 1 — aprovacao de escopo.**"
-            echo "Aplique a label \`escopo-aprovado\` para a pipe criar as sub-issues"
-            echo "e disparar a implementacao. Corrija a lista acima antes, se necessario."
+            echo "**HITL 1 — scope approval.**"
+            echo "Apply the \`scope-approved\` label for the pipeline to create sub-issues"
+            echo "and start the planning loop. Correct the list above first if needed."
           } > comment.md
 
           cat comment.md
@@ -225,6 +228,6 @@ jobs:
           gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
           gh api "repos/$REPO/issues/$ISSUE/labels" \
-            -f "labels[]=estado/aguardando-escopo" >/dev/null
+            -f "labels[]=status-awaiting-scope" >/dev/null
 
-          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Fnovo" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-new" >/dev/null 2>&1 || true

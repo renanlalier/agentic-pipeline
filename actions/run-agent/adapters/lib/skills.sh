@@ -1,42 +1,41 @@
 #!/usr/bin/env bash
-# Biblioteca compartilhada para descobrir e selecionar skills no formato
-# padrao (pasta/SKILL.md com frontmatter). Usada por adapters cujo CLI
-# NAO tem carregamento nativo de skill por description - o fallback aqui
-# e um matcher simples por palavras-chave da description contra o prompt.
+# Shared library for discovering and selecting skills in the standard format
+# (folder/SKILL.md with frontmatter). Used by adapters whose CLI does NOT
+# have native skill loading by description — the fallback here is a simple
+# keyword matcher of the description against the prompt.
 #
-# CLIs com carregamento nativo (ex: Claude Code, que escaneia .claude/skills/
-# e decide relevancia semanticamente) NAO devem usar este fallback - devem
-# copiar as pastas de skill para onde o proprio CLI as descobre e deixar
-# ele decidir. Ver cursor.sh para o caso de carregamento nativo/best-effort.
+# CLIs with native loading (e.g. Claude Code, which scans .claude/skills/
+# and decides relevance semantically) should NOT use this fallback — they
+# should copy skill folders to where the CLI discovers them and let it decide.
+# See cursor.sh for the native/best-effort loading case.
 
-# list_skill_files <dir> - imprime um caminho de SKILL.md por linha
+# list_skill_files <dir> - prints one SKILL.md path per line
 list_skill_files() {
   local dir="$1"
   [ -d "$dir" ] || return 0
   find "$dir" -mindepth 2 -maxdepth 2 -name SKILL.md 2>/dev/null
 }
 
-# skill_frontmatter <path> - imprime so o bloco YAML entre os dois '---'
+# skill_frontmatter <path> - prints only the YAML block between the two '---'
 skill_frontmatter() {
   awk '/^---[[:space:]]*$/{c++; next} c==1{print} c>=2{exit}' "$1"
 }
 
-# skill_body <path> - imprime o conteudo apos o segundo '---'
+# skill_body <path> - prints the content after the second '---'
 skill_body() {
   awk 'BEGIN{c=0} /^---[[:space:]]*$/{c++; next} c>=2{print}' "$1"
 }
 
-# skill_field <path> <campo> - le um campo do frontmatter (name, description)
+# skill_field <path> <field> - reads a field from the frontmatter (name, description)
 skill_field() {
   local path="$1" field="$2"
   skill_frontmatter "$path" | yq -r ".$field // \"\""
 }
 
-# select_skills_by_keyword <prompt_normalizado> <dir...>
-# Fallback generico: casa palavras de 5+ letras da description com o
-# prompt. Imprime o BODY de cada skill que casou, com um cabecalho de
-# origem. Usado quando o CLI nao tem mecanismo proprio de carregamento
-# sob demanda por description.
+# select_skills_by_keyword <normalized_prompt> <dir...>
+# Generic fallback: matches 5+ letter words from the description against the
+# prompt. Prints the BODY of each matched skill with an origin header.
+# Used when the CLI has no native on-demand skill loading by description.
 select_skills_by_keyword() {
   local prompt_norm="$1"; shift
   local dir origin
@@ -54,12 +53,12 @@ select_skills_by_keyword() {
         if echo "$prompt_norm" | grep -qF -- "$word"; then matched=1; break; fi
       done
       if [ "$matched" = "1" ]; then
-        echo "## [skill: $name | origem: $origin] $desc" >&1
+        echo "## [skill: $name | origin: $origin] $desc" >&1
         skill_body "$skill_file"
         echo ""
-        echo "carregada: $name ($origin)" >&2
+        echo "loaded: $name ($origin)" >&2
       else
-        echo "ignorada (sem match): $name ($origin)" >&2
+        echo "skipped (no match): $name ($origin)" >&2
       fi
     done < <(list_skill_files "$dir")
   done

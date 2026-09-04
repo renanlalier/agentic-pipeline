@@ -1,14 +1,14 @@
 name: agent-dev (reusable)
 
-# Fase de IMPLEMENTACAO. Roda DENTRO do repo de produto, disparado
-# quando a sub-issue recebe a label plano-aprovado (ou seja, depois que
-# o loop do agent-plan.yml ja convergiu com aprovacao humana explicita).
-# github.repository aqui e o repo consumidor - so o ARQUIVO veio da platform.
+# IMPLEMENTATION phase. Runs INSIDE the product repo, triggered when the
+# sub-issue receives the plan-approved label (i.e., after the agent-plan.yml
+# loop has converged with explicit human approval).
+# github.repository here is the consumer repo — only the FILE came from the platform.
 #
-# execution_id e OPCIONAL: se nao vier no input, e recuperado da label
-# "execution:<id>" que o agent-fanout aplicou na sub-issue na criacao -
-# mesmo mecanismo do agent-plan.yml, porque quem dispara este workflow
-# via issues.labeled tambem nao tem acesso ao payload original.
+# execution_id is OPTIONAL: if not provided as input, it is recovered from the
+# "execution:<id>" label that agent-fanout applied to the sub-issue on creation —
+# same mechanism as agent-plan.yml, because the issues.labeled trigger also has
+# no access to the original dispatch payload.
 
 on:
   workflow_call:
@@ -37,32 +37,32 @@ on:
         default: ""
 
 jobs:
-  implementar:
+  implement:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
       issues: write
     steps:
-      - name: Checkout deste repositorio
+      - name: Checkout this repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Checkout da platform
+      - name: Checkout platform
         uses: actions/checkout@v5
         with:
           repository: renanlalier/poc-agentic-platform
           ref: v1
           path: .platform
 
-      - name: Instalar yq
+      - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq \
             https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Resolver execution_id (input ou label da sub-issue)
+      - name: Resolve execution_id (input or sub-issue label)
         id: exec
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,34 +76,34 @@ jobs:
               | grep '^execution:' | sed 's/^execution://' | head -1 || true)
           fi
           if [ -z "$EXEC_ID" ]; then
-            echo "::error::execution_id nao veio no input e nao ha label execution:* na sub-issue."
+            echo "::error::execution_id was not provided as input and no execution:* label exists on the sub-issue."
             exit 1
           fi
           echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Provar o isolamento
+      - name: Prove isolation
         run: |
-          echo "### Isolamento deste run" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Run isolation" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- repositorio: \`${{ github.repository }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- repository: \`${{ github.repository }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- run id: \`${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- execution id: \`${{ steps.exec.outputs.execution_id }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- runner: \`$(hostname)\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Conteudo do workspace (so este repo esta em disco):" >> "$GITHUB_STEP_SUMMARY"
+          echo "Workspace contents (only this repo is on disk):" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           ls -1 | grep -v '^\.platform$' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verificar limites do repo
+      - name: Check repo constraints
         run: |
           set -euo pipefail
           if [ -f .agentic/config.yml ]; then
-            echo "Caminhos proibidos para o agente neste repo:"
+            echo "Paths forbidden for the agent in this repo:"
             yq -r '.constraints.forbid_paths[]?' .agentic/config.yml || true
           fi
 
-      - name: Ler o plano aprovado
+      - name: Read the approved plan
         id: plano
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -112,11 +112,11 @@ jobs:
         run: |
           set -euo pipefail
           PLANO=$(gh api "repos/$REPO/issues/$SUB_ISSUE/comments" \
-            --jq '[.[] | select(.body | contains("<!-- pipe:plano-final -->"))] | last | .body // ""')
+            --jq '[.[] | select(.body | contains("<!-- pipe:plan-final -->"))] | last | .body // ""')
 
           if [ -z "$PLANO" ]; then
-            echo "::warning::Nenhum plano marcado como final encontrado. Implementando sem plano explicito."
-            PLANO="(nenhum plano de detalhamento foi encontrado para esta sub-issue)"
+            echo "::warning::No comment marked as the final plan was found. Implementing without an explicit plan."
+            PLANO="(no planning detail was found for this sub-issue)"
           fi
 
           {
@@ -125,7 +125,7 @@ jobs:
             echo "PLANOEOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Criar branch de trabalho
+      - name: Create working branch
         env:
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
         run: |
@@ -133,7 +133,7 @@ jobs:
           git config user.email "agentic@users.noreply.github.com"
           git checkout -b "agentic/$EXEC_ID"
 
-      - name: Executar o papel (implementacao)
+      - name: Execute role (implementation)
         id: agent
         uses: ./.platform/actions/run-agent
         with:
@@ -141,10 +141,10 @@ jobs:
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ steps.exec.outputs.execution_id }}
-          prompt: "Implemente a sub-issue #${{ inputs.sub_issue }} deste repositorio, respeitando o contrato ${{ inputs.contract_ref }} e o plano ja aprovado abaixo. Nao reabra decisoes de decomposicao ja fechadas no plano - implemente o que ele descreve.\n\n${{ steps.plano.outputs.plano }}"
+          prompt: "Implement sub-issue #${{ inputs.sub_issue }} of this repository, respecting contract ${{ inputs.contract_ref }} and the approved plan below. Do not reopen decomposition decisions already closed in the plan — implement what it describes.\n\n${{ steps.plano.outputs.plano }}"
           platform_path: .platform
 
-      - name: Materializar a alteracao
+      - name: Materialize the change
         env:
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           ROLE: ${{ inputs.role }}
@@ -158,20 +158,20 @@ jobs:
           {
             echo "## $EXEC_ID"
             echo ""
-            echo "- papel: \`$ROLE\`"
+            echo "- role: \`$ROLE\`"
             echo "- cli: \`$CLI\`"
-            echo "- modelo: \`$MODEL\`"
+            echo "- model: \`$MODEL\`"
             echo "- sub-issue: #$SUB_ISSUE"
-            echo "- contrato: \`$CONTRACT_REF\`"
+            echo "- contract: \`$CONTRACT_REF\`"
             echo "- run: $RUN_URL"
             echo ""
           } >> CHANGELOG-agentic.md
 
           git add CHANGELOG-agentic.md
-          git commit -m "feat: $ROLE para #$SUB_ISSUE (exec $EXEC_ID)"
+          git commit -m "feat: $ROLE for #$SUB_ISSUE (exec $EXEC_ID)"
           git push origin "agentic/$EXEC_ID"
 
-      - name: Abrir pull request em draft (REST)
+      - name: Open draft pull request (REST)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -184,20 +184,20 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Gerado pela pipe agentica."
+            echo "Generated by the agentic pipeline."
             echo ""
-            echo "| campo | valor |"
+            echo "| field | value |"
             echo "|---|---|"
             echo "| execution_id | \`$EXEC_ID\` |"
-            echo "| papel | \`$ROLE\` |"
+            echo "| role | \`$ROLE\` |"
             echo "| cli | \`$CLI\` |"
-            echo "| modelo | \`$MODEL\` |"
-            echo "| contrato | \`$CONTRACT_REF\` |"
+            echo "| model | \`$MODEL\` |"
+            echo "| contract | \`$CONTRACT_REF\` |"
             echo ""
             echo "Closes #$SUB_ISSUE"
             echo ""
             echo "---"
-            echo "**HITL 3** — este PR precisa de review humano. O App que abriu nao pode aprovar."
+            echo "**HITL 2** — this PR requires human review. The app that opened it cannot approve it."
           } > pr_body.md
 
           jq -n \
@@ -209,9 +209,9 @@ jobs:
             > pr_payload.json
 
           gh api "repos/$REPO/pulls" --input pr_payload.json > pr.json
-          echo "PR criado: $(jq -r .html_url pr.json)"
+          echo "PR created: $(jq -r .html_url pr.json)"
 
-      - name: Reportar na sub-issue (REST)
+      - name: Report on sub-issue (REST)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -219,6 +219,6 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          MSG="Implementacao concluida em \`$REPO\`. Run: $RUN_URL"
+          MSG="Implementation complete in \`$REPO\`. Run: $RUN_URL"
           jq -n --arg body "$MSG" '{body: $body}' > comment_payload.json
           gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input comment_payload.json

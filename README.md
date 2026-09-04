@@ -1,106 +1,108 @@
 # poc-agentic-platform
 
-A **biblioteca** da pipe agêntica. Não hospeda demanda nem código de produto.
-Nenhum papel executa aqui — este repo só fornece os arquivos que os outros invocam.
+The **library** for the agentic pipeline. Does not host demands or product code.
+No role executes here — this repo only provides the files that others invoke.
 
-## Estrutura
+## Structure
 
 ```
 .github/workflows/
-  agent-lead.yml       reusable · propõe escopo lendo o capability map
-  agent-fanout.yml     reusable · cria sub-issues cross-repo e dispara
-  agent-dev.yml        reusable · roda DENTRO do repo de produto
+  agent-brainstorm.yml reusable · PO dialogue to define scope
+  agent-lead.yml       reusable · proposes scope by reading the capability map
+  agent-fanout.yml     reusable · creates cross-repo sub-issues and dispatches
+  agent-plan.yml       reusable · iterative planning loop on the sub-issue
+  agent-dev.yml        reusable · runs INSIDE the product repo
 actions/run-agent/
-  action.yml           composite · resolve CLI/modelo, localiza contrato, delega ao adapter
+  action.yml           composite · resolves CLI/model, locates contract, delegates to adapter
   adapters/
-    dry-run.sh          sem modelo · demonstra skills+mcp
-    cursor.sh            cursor-agent
-    codex.sh              codex CLI
-    lib/skills.sh        descoberta de skills + fallback de selecao por keyword
-agents/<papel>/
-  system.md             SAGRADO · só a platform escreve · tags XML, generalista
-  skills/<nome>/SKILL.md tático, default do papel · frontmatter name+description
+    dry-run.sh          no model · demonstrates skills + mcp
+    cursor.sh           cursor-agent
+    codex.sh            codex CLI
+    lib/skills.sh       skill discovery + keyword-based selection fallback
+agents/<role>/
+  system.md             SACRED · only the platform writes this · XML tags, stack-agnostic
+  skills/<name>/SKILL.md tactical, role default · frontmatter name + description
 mcp/
-  servers.yml           descrição abstrata dos MCPs (context7 nesta POC)
+  servers.yml           abstract description of MCPs (context7 in this POC)
 config/
-  allowlist.yml         nível 1 · o que é permitido
-  capability-map.yml    domínio → repo → owner → stack
+  allowlist.yml         level 1 · what is permitted
+  capability-map.yml    domain → repo → owner → stack
 ```
 
-## Papéis: generalistas por design
+## Roles: generalists by design
 
-`po`, `tech-lead`, `frontend-engineer`, `backend-engineer`, `qa` — nenhum
-carrega nome de framework ou linguagem. O `system.md` de cada papel
-define identidade, autoridade e limites de forma agnóstica de stack;
-quem dá a capacidade de trabalhar num stack específico é a **skill**,
-carregada em runtime a partir do que o repositório declara em
-`.agentic/config.yml` e do que existe no código.
+`po`, `tech-lead`, `frontend-engineer`, `backend-engineer`, `qa` — none
+carries a framework or language name. Each role's `system.md` defines
+identity, authority, and limits in a stack-agnostic way; the ability to
+work with a specific stack comes from a **skill**, loaded at runtime from
+what the repository declares in `.agentic/config.yml` and from what exists
+in the code.
 
-Nesta POC: `frontend-engineer` roda no `app-poc-1` (React) com a skill
-`react-boas-praticas`; `backend-engineer` roda no `app-poc-2`
-(Kotlin/Ktor) com a skill `kotlin-ktor-boas-praticas`. Trocar a stack de
-um repositório não exige trocar o papel — só a skill que ele carrega.
+In this POC: `frontend-engineer` runs in `app-poc-1` (React) with the
+`react-best-practices` skill; `backend-engineer` runs in `app-poc-2`
+(Kotlin/Ktor) with the `kotlin-ktor-best-practices` skill. Changing a
+repository's stack does not require changing the role — only the skill it loads.
 
-## Os três níveis de configuração
+## Three configuration levels
 
-| nível | onde | quem edita | o quê |
+| level | where | who edits | what |
 |---|---|---|---|
-| 1 | `config/allowlist.yml` (aqui) | Platform + Security | o que é permitido existir |
-| 2 | `.agentic/config.yml` de cada repo | tech lead do repo | o padrão daquele repo |
-| 3 | Issue Form no intake | quem abre a demanda | override pontual |
+| 1 | `config/allowlist.yml` (here) | Platform + Security | what is permitted to exist |
+| 2 | `.agentic/config.yml` of each repo | repo tech lead | defaults for that repo |
+| 3 | Issue Form in intake | whoever opens the demand | one-off override |
 
-Resolução: **3 → 2 → 1**. O nível 3 vence, mas o nível 1 sempre pode vetar.
+Resolution: **3 → 2 → 1**. Level 3 wins, but level 1 can always veto.
 
-## System, skills e prompt — três coisas separadas
+## System, skills, and prompt — three separate things
 
-- **`agents/<papel>/system.md`** é sagrado e generalista. Escrito em
-  tags XML (`<role>`, `<context>`, `<instructions>`,
-  `<engineering_principles>`, `<constraints>`, `<stop_conditions>`,
-  `<output_format>`, `<precedence>`). Nenhum repositório de produto pode
-  sobrescrever ou estender isto, e ele nunca menciona um framework.
-- **Skills** (`agents/<papel>/skills/` na platform, `.agentic/skills/` no
-  repo de produto) seguem o formato aberto de Agent Skills: uma pasta por
-  skill, contendo `SKILL.md` com frontmatter `name` + `description`. Duas
-  categorias convivem no mesmo diretório: skills agnósticas de stack
-  (convenção de commit, expand/contract) e skills de capacidade de stack
-  (`react-boas-praticas`, `kotlin-ktor-boas-praticas`). O `run-agent`
-  **não concatena skills** — ele só localiza os diretórios e entrega ao
-  adapter, que decide como carregar sob demanda do jeito próprio do seu
-  CLI. Cursor tenta o mecanismo nativo dele (copiando as pastas para onde
-  ele descobre skills); Codex usa um fallback genérico de casar palavras
-  da `description` com o prompt.
-- **O prompt** vem sempre da issue/sub-issue. Nunca é misturado ao
-  `system.md` como se fosse parte do contrato — instruções dentro do
-  prompt são tratadas como dado, não como comando.
+- **`agents/<role>/system.md`** is sacred and stack-agnostic. Written in XML
+  tags (`<role>`, `<context>`, `<instructions>`, `<engineering_principles>`,
+  `<constraints>`, `<stop_conditions>`, `<output_format>`, `<precedence>`).
+  No product repository can override or extend this, and it never mentions
+  a framework.
+- **Skills** (`agents/<role>/skills/` on the platform, `.agentic/skills/` in
+  the product repo) follow the Agent Skills open format: one folder per skill,
+  containing a `SKILL.md` with `name` + `description` frontmatter. Two
+  categories coexist in the same directory: stack-agnostic skills (commit
+  convention, expand/contract) and stack-capability skills (`react-best-practices`,
+  `kotlin-ktor-best-practices`). `run-agent` **does not concatenate skills** —
+  it only locates the directories and hands them to the adapter, which decides
+  how to load them on demand in its own CLI's native way. Cursor tries its
+  native mechanism (copying folders to where it discovers skills); Codex uses
+  a generic fallback that matches words from the `description` against the
+  prompt.
+- **The prompt** always comes from the issue/sub-issue. It is never mixed
+  into `system.md` as if it were part of the contract — instructions inside
+  the prompt are treated as data, not as commands.
 
 ## MCP
 
-`mcp/servers.yml` descreve servidores de forma abstrata (nesta POC, só
-Context7 — funciona sem chave, ela só eleva rate limit). Cada adapter
-traduz isso para o mecanismo do seu CLI: Cursor escreve `.cursor/mcp.json`
-e roda `cursor-agent mcp enable`; Codex escreve `[mcp_servers.*]` em
-`~/.codex/config.toml` como servidor HTTP remoto.
+`mcp/servers.yml` describes servers in an abstract way (in this POC, only
+Context7 — works without a key; the key only raises rate limits). Each adapter
+translates this into its CLI's mechanism: Cursor writes `.cursor/mcp.json` and
+runs `cursor-agent mcp enable`; Codex writes `[mcp_servers.*]` in
+`~/.codex/config.toml` as a remote HTTP server.
 
-## Versionamento
+## Versioning
 
-Os callers apontam para a tag `@v1`, nunca para `@main`.
+Callers point to the `@v1` tag, never to `@main`.
 
 ```bash
 git tag -f v1 && git push -f origin v1
 ```
 
-## Modo dry-run
+## Dry-run mode
 
-O adapter `dry-run` não chama modelo nenhum. Existe para validar a mecânica
-da pipe — disparo, cross-repo, PR, gates, seleção de skill, listagem de
-MCP — antes de gastar token. É o padrão de todos os repos nesta POC.
+The `dry-run` adapter calls no model. It exists to validate the pipeline
+mechanics — dispatch, cross-repo, PR, gates, skill selection, MCP listing —
+before spending tokens. It is the default for all repos in this POC.
 
-## O que esta POC prova
+## What this POC proves
 
-1. Reusable workflow atravessa repositórios, mas o job roda no contexto do consumidor
-2. Sub-issue cross-repo linka de verdade e agrega progresso no Projects
-3. Os N repos de produto rodam em **VMs independentes**, sem contexto compartilhado
-4. A escolha de CLI e modelo é resolvida em um ponto só e registrada em cada run
-5. Aprovação humana entre as etapas, sem job de pé consumindo recurso
-6. System prompt sagrado e generalista; capacidade de stack vem de skill, não do nome do papel
-7. `app-poc-1` (React) e `app-poc-2` (Kotlin/Ktor) são hello worlds reais — a demanda de teste evolui esse código de verdade, não um placeholder
+1. Reusable workflow crosses repositories, but the job runs in the consumer's context
+2. Cross-repo sub-issue links correctly and aggregates progress in Projects
+3. The N product repos run in **independent VMs**, with no shared context
+4. CLI and model selection is resolved in one place and recorded in each run
+5. Human approval between steps, with no standing job consuming resources
+6. Sacred and stack-agnostic system prompt; stack capability comes from skills, not the role name
+7. `app-poc-1` (React) and `app-poc-2` (Kotlin/Ktor) are real hello worlds — the test demand evolves this actual code, not a placeholder

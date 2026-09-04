@@ -1,12 +1,12 @@
 version: 1
 
-# Nivel 1 da configuracao. Editado por Platform Engineering + Security.
-# O .agentic/config.yml de cada repo so pode escolher DENTRO desta lista.
+# Level 1 configuration. Edited by Platform Engineering + Security.
+# The .agentic/config.yml of each repo can only choose FROM this list.
 #
-# Os papeis abaixo sao generalistas de proposito - frontend-engineer e
-# backend-engineer nao carregam nome de framework. A capacidade de stack
-# (React, Kotlin/Ktor, o que vier depois) mora nas skills de cada papel,
-# nao no nome do papel. Ver agents/<papel>/skills/.
+# Roles below are intentionally generic — frontend-engineer and
+# backend-engineer do not embed a framework name. Stack capability
+# (React, Kotlin/Ktor, whatever comes next) lives in each role's
+# skills, not in the role name. See brain/skills/.
 
 providers:
   anthropic:
@@ -20,7 +20,7 @@ clis:
   dry-run:
     approved: true
     adapter: actions/run-agent/adapters/dry-run.sh
-    notes: "adapter de POC - nao chama modelo, simula a saida do papel"
+    notes: "POC adapter — does not call any model, simulates role output"
   cursor:
     approved: true
     adapter: actions/run-agent/adapters/cursor.sh

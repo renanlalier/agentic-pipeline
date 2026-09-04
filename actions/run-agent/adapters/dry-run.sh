@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Adapter de POC. Nao chama modelo nenhum.
+# POC adapter — does not call any model.
 #
-# Contrato comum a todos os adapters (env vars):
+# Common contract for all adapters (env vars):
 #   ROLE, MODEL, EXECUTION_ID, PROMPT
-#   SYSTEM_FILE          -> system.md do papel (sagrado, so leitura)
-#   PLATFORM_SKILLS_DIR  -> agents/<role>/skills/ na platform
-#   REPO_SKILLS_DIR      -> .agentic/skills/ no repo consumidor
-#   MCP_CONFIG           -> mcp/servers.yml (descricao abstrata)
+#   SYSTEM_FILE          -> system.md for the role (sacred, read-only)
+#   PLATFORM_SKILLS_DIR  -> brain/skills/ in the platform repo
+#   REPO_SKILLS_DIR      -> .agentic/skills/ in the consumer repo
+#   MCP_CONFIG           -> mcp/servers.yml (abstract description)
 #
-# Este adapter usa o fallback de selecao por keyword (lib/skills.sh) para
-# DEMONSTRAR o mecanismo de carregamento sob demanda, sem custo de token.
+# This adapter uses the keyword-based skill selection fallback (lib/skills.sh)
+# to DEMONSTRATE the on-demand skill loading mechanism without token cost.
 #
-# LIMITACAO GERAL: sem modelo real, nenhum dos loops abaixo (po/brainstorm,
-# engineer/planejamento) faz julgamento de verdade - so detecta uma
-# palavra de aprovacao no texto acumulado. Prova a MECANICA do loop, nao
-# a qualidade da decisao. Com CLI real (cursor/codex) o comportamento muda.
+# GENERAL LIMITATION: without a real model, none of the loops below
+# (po/brainstorm, engineer/planning) make real judgments — they only detect
+# an approval keyword in the accumulated text. Proves the MECHANICS of the
+# loop, not decision quality. With a real CLI (cursor/codex) behavior changes.
 set -euo pipefail
 
 : "${ROLE:?}"
@@ -26,15 +26,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/skills.sh
 source "$SCRIPT_DIR/lib/skills.sh"
 
-echo "--- system usado (sagrado, nao editavel pelo repo) ---" >&2
+echo "--- system used (sacred, not editable by the repo) ---" >&2
 head -c 200 "$SYSTEM_FILE" >&2; echo "..." >&2
 
-echo "--- selecao de skills por keyword (fallback generico) ---" >&2
+echo "--- skill selection by keyword (generic fallback) ---" >&2
 PROMPT_NORM=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')
 SELECTED_SKILLS=$(select_skills_by_keyword "$PROMPT_NORM" "${PLATFORM_SKILLS_DIR:-}" "${REPO_SKILLS_DIR:-}")
 echo "$SELECTED_SKILLS" >&2
 
-echo "--- MCPs que seriam instalados ---" >&2
+echo "--- MCPs that would be installed ---" >&2
 if [ -f "${MCP_CONFIG:-}" ]; then
   yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r s; do
     echo "  - $s: $(yq -r ".servers.\"$s\".description" "$MCP_CONFIG" | head -c 80)" >&2
@@ -42,40 +42,40 @@ if [ -f "${MCP_CONFIG:-}" ]; then
 fi
 
 N_SKILLS=$(echo "$SELECTED_SKILLS" | grep -c '^## \[skill:' || true)
-APPROVAL_REGEX='aprovad[oa]|aprovo\b|approved|pode seguir'
+APPROVAL_REGEX='approved|looks good|can proceed|lgtm|ok to proceed'
 
 case "$ROLE" in
   po)
-    # Loop de brainstorming (issue pai). Ver skill brainstorming.
+    # Brainstorming loop (parent issue). See brainstorming skill.
     if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
-      DEMANDA=$(echo "$PROMPT" | awk '/^## Demanda original/{c=1;next} /^## Conversa/{c=0} c')
-      ESCOPO="[modo dry-run - escopo aproximado, nao e julgamento real de design]
+      DEMANDA=$(echo "$PROMPT" | awk '/^## Original demand/{c=1;next} /^## Conversation/{c=0} c')
+      SCOPE="[dry-run mode — approximate scope, not real design judgment]
 
 $(echo "$DEMANDA" | sed '/^$/d')"
 
       jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg escopo "$ESCOPO" \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg scope "$SCOPE" \
         '{
           role: $role, execution_id: $exec_id, status: "approved",
-          question: "", escopo: $escopo,
-          summary: "Aprovacao detectada em modo dry-run (deteccao textual, nao julgamento real)",
-          notes: "adapter dry-run: use cli cursor ou codex para um brainstorming real"
+          question: "", scope: $scope,
+          summary: "Approval detected in dry-run mode (textual detection, not real judgment)",
+          notes: "dry-run adapter: use cli cursor or codex for real brainstorming"
         }'
     else
-      N_HUMANO=$(echo "$PROMPT" | grep -c '\[HUMANO\]' || true)
+      N_HUMANO=$(echo "$PROMPT" | grep -c '\[HUMAN\]' || true)
       if [ "$N_HUMANO" -eq 0 ]; then
-        QUESTION="[pergunta enlatada de dry-run] Qual comportamento exato deve mudar, do ponto de vista de quem usa o sistema?"
+        QUESTION="[dry-run canned question] What exact behavior should change, from the perspective of the person using the system?"
       else
-        QUESTION="[pergunta enlatada de dry-run] Ha alguma restricao ou algo que NAO deve mudar (non-goal)? Se nao houver mais nada em aberto, comente 'aprovado'."
+        QUESTION="[dry-run canned question] Are there any constraints or things that must NOT change (non-goals)? If nothing is open, comment 'approved'."
       fi
 
       jq -n \
         --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg question "$QUESTION" \
         '{
           role: $role, execution_id: $exec_id, status: "ask",
-          question: $question, escopo: "",
-          summary: "Turno de brainstorming em modo dry-run",
-          notes: "adapter dry-run: pergunta enlatada, nao ha julgamento real sem modelo"
+          question: $question, scope: "",
+          summary: "Brainstorming turn in dry-run mode",
+          notes: "dry-run adapter: canned question, no real judgment without a model"
         }'
     fi
     ;;
@@ -86,51 +86,52 @@ $(echo "$DEMANDA" | sed '/^$/d')"
     while IFS= read -r line; do
       if [[ "$line" =~ ^\#\#\#\ (.+)$ ]]; then
         CURRENT_NAME="${BASH_REMATCH[1]}"
-      elif [[ "$line" =~ ^papel\ logico\ sugerido:\ (.+)$ ]] && [ -n "$CURRENT_NAME" ]; then
+      elif [[ "$line" =~ ^suggested\ logical\ role:\ (.+)$ ]] && [ -n "$CURRENT_NAME" ]; then
         CURRENT_ROLE="${BASH_REMATCH[1]}"
         REPOS_JSON=$(echo "$REPOS_JSON" | jq --arg n "$CURRENT_NAME" --arg r "$CURRENT_ROLE" \
-          '. + [{"name":$n,"role":$r,"reason":"modo dry-run: sem chamada de modelo, logo sem julgamento semantico real - proposta conservadora inclui todos os repos elegiveis do fingerprint"}]')
+          '. + [{"name":$n,"role":$r,"reason":"dry-run mode: no model call, no real semantic judgment — conservative proposal includes all eligible repos from the fingerprint"}]')
         CURRENT_NAME=""
       fi
     done <<< "$PROMPT"
 
     N_FOUND=$(echo "$REPOS_JSON" | jq 'length')
-    echo "repos encontrados no fingerprint (modo dry-run, sem julgamento): $N_FOUND" >&2
+    echo "repos found in fingerprint (dry-run mode, no judgment): $N_FOUND" >&2
 
     jq -n \
       --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --argjson repos "$REPOS_JSON" --arg n_skills "$N_SKILLS" \
       '{
         role: $role, execution_id: $exec_id, status: "ok",
-        summary: ("Proposta conservadora em modo dry-run (" + ($repos | length | tostring) + " repo(s) do fingerprint, " + $n_skills + " skill(s) carregada(s) por keyword)"),
+        issue_type: "task",
+        summary: ("Conservative proposal in dry-run mode (" + ($repos | length | tostring) + " repo(s) from fingerprint, " + $n_skills + " skill(s) loaded by keyword)"),
         repos: $repos, contract_ref: "v1",
-        notes: "adapter dry-run nao tem julgamento semantico - roda com CLI real (cursor/codex) para uma proposta que de fato analisa o fingerprint de cada repo"
+        notes: "dry-run adapter has no semantic judgment — run with a real CLI (cursor/codex) for a proposal that actually analyzes each repo fingerprint"
       }'
     ;;
 
   frontend-engineer|backend-engineer)
-    if echo "$PROMPT" | grep -q 'MODO: PLANEJAMENTO_ITERATIVO'; then
-      # Loop de detalhamento tecnico (sub-issue). Ver skill writing-plans.
+    if echo "$PROMPT" | grep -q 'MODE: ITERATIVE_PLANNING'; then
+      # Technical planning loop (sub-issue). See writing-plans skill.
       if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
         jq -n \
           --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
           '{
             role: $role, execution_id: $exec_id, status: "approved",
             kind: "", content: "",
-            notes: "adapter dry-run: aprovacao detectada por texto, nao e julgamento real"
+            notes: "dry-run adapter: approval detected by text, not real judgment"
           }'
       else
         N_PIPE=$(echo "$PROMPT" | grep -c '\[PIPE\]' || true)
         if [ "$N_PIPE" -eq 0 ]; then
           KIND="plan"
-          CONTENT="[plano enlatado de dry-run]
-1. Mapear o arquivo principal que a sub-issue afeta neste repositorio.
-2. Implementar a mudanca descrita, seguindo o padrao ja existente no repo.
-3. Escrever/atualizar teste cobrindo o comportamento novo.
+          CONTENT="[dry-run canned plan]
+1. Map the main file this sub-issue affects in this repository.
+2. Implement the described change, following the existing pattern in the repo.
+3. Write/update a test covering the new behavior.
 
-Aprove comentando 'aprovado', ou pergunte algo antes."
+Approve by commenting 'approved', or ask a question first."
         else
           KIND="question"
-          CONTENT="[pergunta enlatada de dry-run] O plano acima cobre o suficiente, ou falta algum caso de borda? Comente 'aprovado' para seguir."
+          CONTENT="[dry-run canned question] Does the plan above cover enough, or is there an edge case missing? Comment 'approved' to proceed."
         fi
 
         jq -n \
@@ -138,19 +139,19 @@ Aprove comentando 'aprovado', ou pergunte algo antes."
           '{
             role: $role, execution_id: $exec_id, status: "ask",
             kind: $kind, content: $content,
-            notes: "adapter dry-run: conteudo enlatado, nao ha julgamento real sem modelo"
+            notes: "dry-run adapter: canned content, no real judgment without a model"
           }'
       fi
     else
-      # Fase de implementacao (apos plano aprovado)
+      # Implementation phase (after plan approved)
       cat <<JSON
 {
   "role": "$ROLE",
   "execution_id": "$EXECUTION_ID",
   "status": "ok",
-  "summary": "Implementacao simulada em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword)",
+  "summary": "Simulated implementation in dry-run mode ($N_SKILLS skill(s) loaded by keyword)",
   "changed_files": ["CHANGELOG-agentic.md"],
-  "notes": "adapter dry-run: nenhuma chamada de modelo foi feita"
+  "notes": "dry-run adapter: no model call was made"
 }
 JSON
     fi
@@ -162,7 +163,7 @@ JSON
   "role": "$ROLE",
   "execution_id": "$EXECUTION_ID",
   "status": "ok",
-  "summary": "Papel executado em modo dry-run"
+  "summary": "Role executed in dry-run mode"
 }
 JSON
     ;;

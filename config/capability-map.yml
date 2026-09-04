@@ -1,38 +1,37 @@
 version: 2
 owner: renanlalier
 
-# Isto e uma lista de GOVERNANCA - quais repos a pipe tem permissao de
-# tocar, e quem e dono de cada um. NAO e mais um dicionario de
-# palavras-chave: a decisao de quais repos uma demanda afeta e feita
-# pelo agente Tech Lead, lendo a descricao e o README REAIS de cada
-# repo (buscados via API do GitHub em runtime), com julgamento
-# semantico - nao por match literal de string.
+# This is a GOVERNANCE list — which repos the pipeline has permission to
+# touch, and who owns each one. It is NOT a keyword dictionary:
+# the decision of which repos a demand affects is made by the Tech Lead
+# agent, reading the real description and README of each repo (fetched via
+# the GitHub API at runtime), with semantic judgment — not literal string
+# matching.
 #
-# `summary` aqui e um resumo de dominio dado pela platform, para o
-# agente cruzar com o que ele encontrar ao vivo no GitHub. Nao e usado
-# para grep.
+# `summary` here is a domain summary provided by the platform, for the
+# agent to cross-reference with what it finds live on GitHub. Not used
+# for grep.
 
 repos:
   - name: app-poc-1
     role: frontend-engineer
-    owner_team: time-frontend
-    summary: "Interface do usuario - telas, componentes, navegacao, formularios."
+    owner_team: frontend-team
+    summary: "User interface — screens, components, navigation, forms."
   - name: app-poc-2
     role: backend-engineer
-    owner_team: time-backend
-    summary: "API e regras de negocio - rotas, contratos, autenticacao, persistencia."
+    owner_team: backend-team
+    summary: "API and business rules — routes, contracts, authentication, persistence."
 
-# Regras de propagacao: se um repo entra no escopo, outro provavelmente entra junto.
+# Propagation rules: if one repo enters scope, another likely comes along.
 implies:
   - when: app-poc-2
     likely: [app-poc-1]
-    reason: "mudanca de contrato quase sempre exige acompanhamento na UI"
+    reason: "a contract change almost always requires a corresponding UI update"
     requires: expand-contract
 
-# Repos que nunca entram no escopo automatico, mesmo que a demanda os
-# mencione.
+# Repos that never enter automatic scope, even if the demand names them.
 excluded:
   - name: poc-agentic-platform
-    reason: "a pipe nao se modifica a si mesma dentro de uma demanda"
+    reason: "the pipeline does not modify itself within a demand"
   - name: poc-agentic-intake
-    reason: "e o registro de trabalho, nao um alvo de implementacao"
+    reason: "it is the work record, not an implementation target"
