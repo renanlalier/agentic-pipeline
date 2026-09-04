@@ -1,41 +1,35 @@
 name: run-agent
 description: >
   Resolve CLI e modelo (nivel 3 -> 2 -> 1), valida contra a allowlist,
-  monta o contrato do papel e despacha para o adapter correspondente.
-  Ponto unico onde a escolha de CLI acontece.
+  monta o CONTRATO DO PAPEL EM TRES BLOCOS SEPARADOS - system (sagrado,
+  so a platform), skills (tatico, platform + repo) e prompt (a demanda,
+  vinda da issue) - e despacha para o adapter correspondente.
 
 inputs:
   role:
     description: "Papel logico a executar (po, lead-swe, frontend-swe, ...)"
     required: true
   cli_override:
-    description: "CLI escolhido no nivel 3 (vazio herda o nivel 2)"
     required: false
     default: ""
   model_override:
-    description: "Modelo escolhido no nivel 3 (vazio herda o nivel 2)"
     required: false
     default: ""
   execution_id:
-    description: "Id que correlaciona todos os runs da mesma demanda"
     required: true
   prompt:
-    description: "Entrada para o agente"
+    description: "A TAREFA. Vem da issue. Nunca e misturado ao system."
     required: true
   platform_path:
-    description: "Caminho onde a platform foi checada out"
     required: false
     default: ".platform"
 
 outputs:
   cli:
-    description: "CLI efetivamente usado"
     value: ${{ steps.resolve.outputs.cli }}
   model:
-    description: "Modelo efetivamente usado"
     value: ${{ steps.resolve.outputs.model }}
   result:
-    description: "Saida do agente (JSON)"
     value: ${{ steps.dispatch.outputs.result }}
 
 runs:
@@ -49,11 +43,9 @@ runs:
         PLAT="${{ inputs.platform_path }}"
         ROLE="${{ inputs.role }}"
 
-        # nivel 2: config do repo consumidor
         CLI_L2=$(yq -r ".defaults.cli // \"\"" .agentic/config.yml 2>/dev/null || echo "")
         MODEL_L2=$(yq -r ".defaults.models.\"$ROLE\" // \"\"" .agentic/config.yml 2>/dev/null || echo "")
 
-        # nivel 3 vence se preenchido
         CLI="${{ inputs.cli_override }}"
         [ -z "$CLI" ] && CLI="$CLI_L2"
         [ -z "$CLI" ] && CLI="dry-run"
@@ -62,7 +54,6 @@ runs:
         [ -z "$MODEL" ] && MODEL="$MODEL_L2"
         [ -z "$MODEL" ] && MODEL="dry-run"
 
-        # nivel 1: allowlist manda em tudo
         APPROVED=$(yq -r ".clis.\"$CLI\".approved // false" "$PLAT/config/allowlist.yml")
         if [ "$APPROVED" != "true" ]; then
           echo "::error::CLI '$CLI' nao esta aprovado na allowlist (nivel 1)"
@@ -87,11 +78,56 @@ runs:
         echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
+    - name: Montar o contrato do papel (system + skills, separados do prompt)
+      id: brain
+      shell: bash
+      run: |
+        set -euo pipefail
+        PLAT="${{ inputs.platform_path }}"
+        ROLE="${{ inputs.role }}"
+
+        SYSTEM_FILE="$PLAT/brain/$ROLE/system.md"
+        if [ ! -f "$SYSTEM_FILE" ]; then
+          echo "::error::System prompt nao encontrado: $SYSTEM_FILE. Todo papel precisa de um."
+          exit 1
+        fi
+
+        # skills = conhecimento tatico. Soma platform (default do papel)
+        # + repo (especifico do stack). Nunca inclui o system.md aqui -
+        # ele e sagrado e trafega em arquivo separado, nunca concatenado
+        # com conteudo editavel por um repo de produto.
+        SKILLS_FILE="$(mktemp)"
+        : > "$SKILLS_FILE"
+
+        if [ -d "$PLAT/brain/$ROLE/skills" ]; then
+          for f in "$PLAT/brain/$ROLE/skills"/*.md; do
+            [ -e "$f" ] || continue
+            echo "## [platform] $(basename "$f")" >> "$SKILLS_FILE"
+            cat "$f" >> "$SKILLS_FILE"
+            echo "" >> "$SKILLS_FILE"
+          done
+        fi
+
+        if [ -d ".agentic/skills" ]; then
+          for f in ".agentic/skills"/*.md; do
+            [ -e "$f" ] || continue
+            echo "## [repo: ${{ github.repository }}] $(basename "$f")" >> "$SKILLS_FILE"
+            cat "$f" >> "$SKILLS_FILE"
+            echo "" >> "$SKILLS_FILE"
+          done
+        fi
+
+        echo "system_file=$SYSTEM_FILE" >> "$GITHUB_OUTPUT"
+        echo "skills_file=$SKILLS_FILE" >> "$GITHUB_OUTPUT"
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Contrato montado:**" >> "$GITHUB_STEP_SUMMARY"
+        echo "- system: \`$SYSTEM_FILE\` (sagrado, so platform)" >> "$GITHUB_STEP_SUMMARY"
+        echo "- skills: $(grep -c '^## \[' "$SKILLS_FILE" || echo 0) arquivo(s) somado(s)" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Emitir headers de atribuicao
       shell: bash
       run: |
-        # Na POC o gateway esta desligado; os headers vao para o log
-        # para provar que a correlacao existe desde o primeiro dia.
         echo "x-execution-id: ${{ inputs.execution_id }}"
         echo "x-run-id: ${{ github.run_id }}"
         echo "x-role: ${{ inputs.role }}"
@@ -108,20 +144,14 @@ runs:
         MODEL: ${{ steps.resolve.outputs.model }}
         EXECUTION_ID: ${{ inputs.execution_id }}
         PROMPT: ${{ inputs.prompt }}
-        PLATFORM_PATH: ${{ inputs.platform_path }}
+        SYSTEM_FILE: ${{ steps.brain.outputs.system_file }}
+        SKILLS_FILE: ${{ steps.brain.outputs.skills_file }}
       run: |
         set -euo pipefail
         PLAT="${{ inputs.platform_path }}"
         ADAPTER=$(yq -r ".clis.\"$CLI\".adapter" "$PLAT/config/allowlist.yml")
-        SKILL="$PLAT/skills/$ROLE.md"
-
-        if [ ! -f "$SKILL" ]; then
-          echo "::error::Contrato de papel nao encontrado: $SKILL"
-          exit 1
-        fi
 
         chmod +x "$PLAT/$ADAPTER"
-        export SKILL_FILE="$SKILL"
         RESULT=$("$PLAT/$ADAPTER")
 
         {
