@@ -1,0 +1,196 @@
+name: agent-brainstorm (reusable)
+
+# Roda no repo de INTAKE, duas vezes ou mais por demanda: quando a issue
+# abre, e de novo a cada comentario humano enquanto o dialogo nao fechou.
+# Usa o papel PO + skill brainstorming (adaptada de obra/superpowers).
+#
+# status "ask"      -> posta a pergunta, mantem estado/brainstorming
+# status "approved" -> preenche a secao ## Escopo no corpo da issue,
+#                      muda para estado/escopo-definido (o on-issue.yml
+#                      do caller escuta essa label para disparar o
+#                      agent-lead existente, que propoe os repos)
+# status "escalated" -> posta o motivo e para (numero de rodadas estourou
+#                      ou o humano pediu para cancelar)
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      execution_id:
+        required: true
+        type: string
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PIPE_TOKEN:
+        required: true
+
+jobs:
+  brainstorm:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout da platform
+        uses: actions/checkout@v5
+        with:
+          repository: renanlalier/poc-agentic-platform
+          ref: v1
+          path: .platform
+
+      - name: Montar a conversa (issue + comentarios ate agora)
+        id: contexto
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$ISSUE" > issue.json
+          TITLE=$(jq -r '.title' issue.json)
+          BODY=$(jq -r '.body // ""' issue.json)
+
+          gh api "repos/$REPO/issues/$ISSUE/comments" > comments.json
+          N=$(jq 'length' comments.json)
+
+          {
+            echo "prompt<<PROMPTEOF"
+            echo "## Demanda original"
+            echo "$TITLE"
+            echo ""
+            echo "$BODY"
+            echo ""
+            if [ "$N" -gt 0 ]; then
+              echo "## Conversa ate agora ($N comentario(s), em ordem)"
+              jq -r '.[] | "**\(.user.login) (\(.user.type)):**\n\(.body)\n"' comments.json
+            else
+              echo "## Conversa ate agora"
+              echo "(nenhum comentario ainda - este e o primeiro turno)"
+            fi
+            echo ""
+            echo "## Instrucao"
+            echo "Aplique a skill brainstorming. Se ainda faltar clareza, faca"
+            echo "UMA pergunta. Se o ultimo comentario humano aprovou um escopo"
+            echo "que voce mesmo apresentou num turno anterior, conclua com"
+            echo "status approved e preencha o campo escopo."
+            echo "PROMPTEOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "rodadas de comentario ate agora: $N"
+
+      - name: Executar o papel po
+        id: agent
+        uses: ./.platform/actions/run-agent
+        with:
+          role: po
+          cli_override: ${{ inputs.cli_override }}
+          model_override: ${{ inputs.model_override }}
+          execution_id: ${{ inputs.execution_id }}
+          prompt: ${{ steps.contexto.outputs.prompt }}
+          platform_path: .platform
+
+      - name: Agir sobre a decisao do PO
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+          EXEC_ID: ${{ inputs.execution_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cat <<'RESULTEOF' > agent_result.json
+          ${{ steps.agent.outputs.result }}
+          RESULTEOF
+
+          echo "--- saida do PO ---"
+          cat agent_result.json
+
+          if ! jq empty agent_result.json 2>/dev/null; then
+            echo "::error::Saida do agente PO nao e JSON valido."
+            exit 1
+          fi
+
+          STATUS=$(jq -r '.status' agent_result.json)
+
+          case "$STATUS" in
+            ask)
+              QUESTION=$(jq -r '.question' agent_result.json)
+              {
+                echo "$QUESTION"
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming_"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+
+              gh api "repos/$REPO/issues/$ISSUE/labels" \
+                -f "labels[]=estado/brainstorming" >/dev/null
+              ;;
+
+            approved)
+              ESCOPO=$(jq -r '.escopo' agent_result.json)
+
+              # substitui o placeholder "## Escopo" do body pela versao preenchida
+              CURRENT_BODY=$(jq -r '.body // ""' <(gh api "repos/$REPO/issues/$ISSUE"))
+              NEW_BODY=$(awk -v escopo="$ESCOPO" '
+                BEGIN{done=0}
+                /^## Escopo/{
+                  print; print "";
+                  print escopo;
+                  skip=1; done=1; next
+                }
+                skip && /^## /{ skip=0 }
+                skip{ next }
+                { print }
+              ' <<< "$CURRENT_BODY")
+
+              jq -n --arg body "$NEW_BODY" '{body: $body}' > body_payload.json
+              gh api -X PATCH "repos/$REPO/issues/$ISSUE" --input body_payload.json
+
+              {
+                echo "**Escopo definido a partir da conversa.** Encaminhando para"
+                echo "proposta de repositorios afetados."
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming concluido_"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+
+              gh api "repos/$REPO/issues/$ISSUE/labels" \
+                -f "labels[]=estado/escopo-definido" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Fbrainstorming" >/dev/null 2>&1 || true
+              ;;
+
+            escalated)
+              NOTES=$(jq -r '.notes' agent_result.json)
+              {
+                echo "## PO escalou esta demanda"
+                echo ""
+                echo "$NOTES"
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)_"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+              exit 1
+              ;;
+
+            *)
+              echo "::error::Status desconhecido retornado pelo PO: $STATUS"
+              exit 1
+              ;;
+          esac
