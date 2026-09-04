@@ -11,12 +11,15 @@
 # Este adapter usa o fallback de selecao por keyword (lib/skills.sh) para
 # DEMONSTRAR o mecanismo de carregamento sob demanda, sem custo de token.
 #
-# Para o papel tech-lead: como este adapter nao tem julgamento semantico
-# real (nao chama modelo), ele nao tenta decidir relevancia - segue a
-# propria politica do system.md ("na duvida, inclua") no seu caso
-# extremo: propoe TODOS os repos elegiveis que aparecem no fingerprint
-# recebido no prompt, e diz explicitamente que isso e uma proposta
-# conservadora de modo dry-run, nao um julgamento real.
+# Para o papel tech-lead: proposta conservadora (todos os repos do
+# fingerprint), ver comentario mais abaixo.
+#
+# Para o papel po: SEM MODELO REAL nao ha como conduzir um brainstorming
+# de verdade - o dry-run so consegue detectar uma palavra de aprovacao
+# no texto acumulado e, na ausencia dela, devolver uma pergunta enlatada.
+# Isso prova a MECANICA do loop (pergunta -> comentario -> pergunta de
+# novo -> aprovacao -> escopo preenchido), nao a qualidade do
+# refinamento. Com CLI real (cursor/codex) o comportamento muda.
 set -euo pipefail
 
 : "${ROLE:?}"
@@ -46,11 +49,48 @@ fi
 N_SKILLS=$(echo "$SELECTED_SKILLS" | grep -c '^## \[skill:' || true)
 
 case "$ROLE" in
+  po)
+    # Deteccao simplissima de aprovacao: qualquer ocorrencia de uma
+    # palavra de aprovacao no texto acumulado (demanda + comentarios).
+    # Limitacao conhecida: nao distingue "aprovado" dito de passagem na
+    # demanda original de uma aprovacao real do humano a um design
+    # apresentado - um modelo real faz essa distincao, o dry-run nao.
+    if echo "$PROMPT_NORM" | grep -qE 'aprovad[oa]|aprovo\b|approved|pode seguir'; then
+      DEMANDA=$(echo "$PROMPT" | awk '/^## Demanda original/{c=1;next} /^## Conversa/{c=0} c')
+      ESCOPO="[modo dry-run - escopo aproximado, nao e julgamento real de design]
+
+$(echo "$DEMANDA" | sed '/^$/d')"
+
+      jq -n \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
+        --arg escopo "$ESCOPO" \
+        '{
+          role: $role, execution_id: $exec_id, status: "approved",
+          question: "", escopo: $escopo,
+          summary: "Aprovacao detectada em modo dry-run (deteccao textual, nao julgamento real)",
+          notes: "adapter dry-run: use cli cursor ou codex para um brainstorming real"
+        }'
+    else
+      N_HUMANO=$(echo "$PROMPT" | grep -c '\[HUMANO\]' || true)
+      if [ "$N_HUMANO" -eq 0 ]; then
+        QUESTION="[pergunta enlatada de dry-run] Qual comportamento exato deve mudar, do ponto de vista de quem usa o sistema?"
+      else
+        QUESTION="[pergunta enlatada de dry-run] Ha alguma restricao ou algo que NAO deve mudar (non-goal) que devemos deixar explicito? Se nao houver mais nada em aberto, comente 'aprovado'."
+      fi
+
+      jq -n \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
+        --arg question "$QUESTION" \
+        '{
+          role: $role, execution_id: $exec_id, status: "ask",
+          question: $question, escopo: "",
+          summary: "Turno de brainstorming em modo dry-run",
+          notes: "adapter dry-run: pergunta enlatada, nao ha julgamento real sem modelo"
+        }'
+    fi
+    ;;
+
   tech-lead)
-    # Extrai "### nome-do-repo" e "papel logico sugerido: X" do fingerprint
-    # que o workflow embutiu no prompt. Sem modelo real, nao ha como
-    # avaliar RELEVANCIA - so ha como listar o que existe. Proposta
-    # conservadora: todos entram, com nota honesta sobre a limitacao.
     REPOS_JSON="[]"
     CURRENT_NAME=""
     while IFS= read -r line; do
@@ -88,7 +128,7 @@ case "$ROLE" in
   "role": "$ROLE",
   "execution_id": "$EXECUTION_ID",
   "status": "ok",
-  "summary": "Alteracao simulada em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword)",
+  "summary": "Fase executada em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword) - a mesma saida generica serve tanto para a fase de detalhamento quanto para a de implementacao neste modo",
   "changed_files": ["CHANGELOG-agentic.md"],
   "notes": "adapter dry-run: nenhuma chamada de modelo foi feita"
 }
