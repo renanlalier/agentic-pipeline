@@ -1,0 +1,58 @@
+version: 1
+
+# O agente Lead consulta este mapa para PROPOR quais repos a demanda atinge.
+# A proposta vai para aprovacao humana (HITL 1) antes de virar sub-issue.
+# Quando o agente erra o escopo, corrige-se ESTE arquivo - nao o prompt.
+
+owner: renanlalier
+
+domains:
+  - name: interface-usuario
+    description: "telas, componentes, navegacao e estados da UI"
+    repos:
+      - name: app-poc-1
+        role: frontend-swe
+        owner_team: time-frontend
+        typical_changes: [tela, componente, navegacao, validacao de formulario]
+    keywords:
+      - tela
+      - botao
+      - formulario
+      - login
+      - navegacao
+      - componente
+      - interface
+      - usuario ve
+      - mensagem de erro
+
+  - name: contratos-e-dados
+    description: "API, contratos, regras de negocio e persistencia"
+    repos:
+      - name: app-poc-2
+        role: backend-swe
+        owner_team: time-backend
+        typical_changes: [endpoint, schema, validacao, integracao]
+    keywords:
+      - api
+      - endpoint
+      - contrato
+      - schema
+      - banco
+      - autenticacao
+      - token
+      - sessao
+      - validacao no servidor
+
+# Regras de propagacao: se um repo entra no escopo, outro provavelmente entra junto.
+implies:
+  - when: app-poc-2
+    likely: [app-poc-1]
+    reason: "mudanca de contrato quase sempre exige acompanhamento na UI"
+    requires: expand-contract
+
+# Repos que nunca entram no escopo automatico.
+excluded:
+  - name: poc-agentic-platform
+    reason: "a pipe nao se modifica a si mesma dentro de uma demanda"
+  - name: poc-agentic-intake
+    reason: "e o registro de trabalho, nao um alvo de implementacao"
