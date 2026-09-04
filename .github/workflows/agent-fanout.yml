@@ -1,8 +1,10 @@
 name: agent-fanout (reusable)
 
 # Passo 3 do fluxo, DEPOIS do HITL 1. Roda no repo de INTAKE.
-# Cria uma sub-issue cross-repo por repositorio aprovado e dispara
-# o workflow de cada um.
+# Cria uma sub-issue cross-repo por repositorio aprovado, marca ela com
+# a label execution:<id> (para os workflows de comentario/label da fase
+# de detalhamento recuperarem o execution_id sem payload de dispatch),
+# e dispara o workflow de cada um.
 #
 # NOTA: tudo aqui e REST puro via `gh api`, incluindo o link de sub-issue
 # (endpoint /issues/{n}/sub_issues, nao a mutation GraphQL addSubIssue).
@@ -110,6 +112,13 @@ jobs:
               -F "sub_issue_id=$CHILD_ID" >/dev/null
             echo "linkada como sub-issue da pai"
 
+            # marca a sub-issue com o execution_id - e assim que o
+            # agent-plan e o agent-dev, disparados depois por comentario
+            # ou por label (sem payload de dispatch), recuperam o id
+            gh api "repos/$OWNER/$REPO/issues/$CHILD_NUM/labels" \
+              -f "labels[]=execution:$EXEC_ID" >/dev/null
+            echo "marcada com execution:$EXEC_ID"
+
             gh api "repos/$OWNER/$REPO/dispatches" \
               -f event_type=agent-dev \
               -f "client_payload[execution_id]=$EXEC_ID" \
@@ -134,6 +143,6 @@ jobs:
             -f "labels[]=estado/implementando" >/dev/null
           gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Faguardando-escopo" >/dev/null 2>&1 || true
 
-          MSG="Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Repare que eles terminam fora de ordem e nenhum sabe do outro."
+          MSG="Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. A implementacao so comeca apos o plano tecnico ser aprovado na sub-issue."
           jq -n --arg body "$MSG" '{body: $body}' > comment_payload.json
           gh api "repos/$REPO/issues/$ISSUE/comments" --input comment_payload.json
