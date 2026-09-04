@@ -1,9 +1,10 @@
 name: run-agent
 description: >
   Resolve CLI e modelo (nivel 3 -> 2 -> 1), valida contra a allowlist,
-  monta o CONTRATO DO PAPEL EM TRES BLOCOS SEPARADOS - system (sagrado,
-  so a platform), skills (tatico, platform + repo) e prompt (a demanda,
-  vinda da issue) - e despacha para o adapter correspondente.
+  localiza o contrato do papel (system sagrado + skills descobriveis) e
+  os MCPs abstratos, e delega tudo ao adapter do CLI escolhido. A action
+  NAO concatena skills nem instala MCP - cada adapter faz isso do jeito
+  proprio do seu CLI.
 
 inputs:
   role:
@@ -78,52 +79,35 @@ runs:
         echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Montar o contrato do papel (system + skills, separados do prompt)
-      id: brain
+    - name: Localizar o contrato do papel
+      id: agent_dir
       shell: bash
       run: |
         set -euo pipefail
         PLAT="${{ inputs.platform_path }}"
         ROLE="${{ inputs.role }}"
 
-        SYSTEM_FILE="$PLAT/brain/$ROLE/system.md"
+        SYSTEM_FILE="$PLAT/agents/$ROLE/system.md"
         if [ ! -f "$SYSTEM_FILE" ]; then
           echo "::error::System prompt nao encontrado: $SYSTEM_FILE. Todo papel precisa de um."
           exit 1
         fi
 
-        # skills = conhecimento tatico. Soma platform (default do papel)
-        # + repo (especifico do stack). Nunca inclui o system.md aqui -
-        # ele e sagrado e trafega em arquivo separado, nunca concatenado
-        # com conteudo editavel por um repo de produto.
-        SKILLS_FILE="$(mktemp)"
-        : > "$SKILLS_FILE"
-
-        if [ -d "$PLAT/brain/$ROLE/skills" ]; then
-          for f in "$PLAT/brain/$ROLE/skills"/*.md; do
-            [ -e "$f" ] || continue
-            echo "## [platform] $(basename "$f")" >> "$SKILLS_FILE"
-            cat "$f" >> "$SKILLS_FILE"
-            echo "" >> "$SKILLS_FILE"
-          done
-        fi
-
-        if [ -d ".agentic/skills" ]; then
-          for f in ".agentic/skills"/*.md; do
-            [ -e "$f" ] || continue
-            echo "## [repo: ${{ github.repository }}] $(basename "$f")" >> "$SKILLS_FILE"
-            cat "$f" >> "$SKILLS_FILE"
-            echo "" >> "$SKILLS_FILE"
-          done
-        fi
+        PLATFORM_SKILLS_DIR="$PLAT/agents/$ROLE/skills"
+        REPO_SKILLS_DIR=".agentic/skills"
 
         echo "system_file=$SYSTEM_FILE" >> "$GITHUB_OUTPUT"
-        echo "skills_file=$SKILLS_FILE" >> "$GITHUB_OUTPUT"
+        echo "platform_skills_dir=$PLATFORM_SKILLS_DIR" >> "$GITHUB_OUTPUT"
+        echo "repo_skills_dir=$REPO_SKILLS_DIR" >> "$GITHUB_OUTPUT"
+
+        N_PLAT=$(find "$PLATFORM_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+        N_REPO=$(find "$REPO_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 
         echo "" >> "$GITHUB_STEP_SUMMARY"
-        echo "**Contrato montado:**" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Contrato localizado:**" >> "$GITHUB_STEP_SUMMARY"
         echo "- system: \`$SYSTEM_FILE\` (sagrado, so platform)" >> "$GITHUB_STEP_SUMMARY"
-        echo "- skills: $(grep -c '^## \[' "$SKILLS_FILE" || echo 0) arquivo(s) somado(s)" >> "$GITHUB_STEP_SUMMARY"
+        echo "- skills disponiveis: $N_PLAT da platform, $N_REPO do repo" >> "$GITHUB_STEP_SUMMARY"
+        echo "- carregamento sob demanda: responsabilidade do adapter de cada CLI" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Emitir headers de atribuicao
       shell: bash
@@ -144,8 +128,11 @@ runs:
         MODEL: ${{ steps.resolve.outputs.model }}
         EXECUTION_ID: ${{ inputs.execution_id }}
         PROMPT: ${{ inputs.prompt }}
-        SYSTEM_FILE: ${{ steps.brain.outputs.system_file }}
-        SKILLS_FILE: ${{ steps.brain.outputs.skills_file }}
+        SYSTEM_FILE: ${{ steps.agent_dir.outputs.system_file }}
+        PLATFORM_SKILLS_DIR: ${{ steps.agent_dir.outputs.platform_skills_dir }}
+        REPO_SKILLS_DIR: ${{ steps.agent_dir.outputs.repo_skills_dir }}
+        MCP_CONFIG: ${{ inputs.platform_path }}/mcp/servers.yml
+        CONTEXT7_API_KEY: ${{ env.CONTEXT7_API_KEY }}
       run: |
         set -euo pipefail
         PLAT="${{ inputs.platform_path }}"
