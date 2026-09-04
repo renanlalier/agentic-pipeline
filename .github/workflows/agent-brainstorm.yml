@@ -142,8 +142,9 @@ jobs:
             approved)
               ESCOPO=$(jq -r '.escopo' agent_result.json)
 
-              # substitui o placeholder "## Escopo" do body pela versao preenchida
-              CURRENT_BODY=$(jq -r '.body // ""' <(gh api "repos/$REPO/issues/$ISSUE"))
+              # substitui o placeholder "## Escopo" do body pela versao
+              # preenchida - reusa issue.json ja salvo no passo anterior
+              CURRENT_BODY=$(jq -r '.body // ""' issue.json)
               NEW_BODY=$(awk -v escopo="$ESCOPO" '
                 BEGIN{done=0}
                 /^## Escopo/{
