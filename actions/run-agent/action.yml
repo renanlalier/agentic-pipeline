@@ -1,0 +1,131 @@
+name: run-agent
+description: >
+  Resolve CLI e modelo (nivel 3 -> 2 -> 1), valida contra a allowlist,
+  monta o contrato do papel e despacha para o adapter correspondente.
+  Ponto unico onde a escolha de CLI acontece.
+
+inputs:
+  role:
+    description: "Papel logico a executar (po, lead-swe, frontend-swe, ...)"
+    required: true
+  cli_override:
+    description: "CLI escolhido no nivel 3 (vazio herda o nivel 2)"
+    required: false
+    default: ""
+  model_override:
+    description: "Modelo escolhido no nivel 3 (vazio herda o nivel 2)"
+    required: false
+    default: ""
+  execution_id:
+    description: "Id que correlaciona todos os runs da mesma demanda"
+    required: true
+  prompt:
+    description: "Entrada para o agente"
+    required: true
+  platform_path:
+    description: "Caminho onde a platform foi checada out"
+    required: false
+    default: ".platform"
+
+outputs:
+  cli:
+    description: "CLI efetivamente usado"
+    value: ${{ steps.resolve.outputs.cli }}
+  model:
+    description: "Modelo efetivamente usado"
+    value: ${{ steps.resolve.outputs.model }}
+  result:
+    description: "Saida do agente (JSON)"
+    value: ${{ steps.dispatch.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolver configuracao (nivel 3 -> 2 -> 1)
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        PLAT="${{ inputs.platform_path }}"
+        ROLE="${{ inputs.role }}"
+
+        # nivel 2: config do repo consumidor
+        CLI_L2=$(yq -r ".defaults.cli // \"\"" .agentic/config.yml 2>/dev/null || echo "")
+        MODEL_L2=$(yq -r ".defaults.models.\"$ROLE\" // \"\"" .agentic/config.yml 2>/dev/null || echo "")
+
+        # nivel 3 vence se preenchido
+        CLI="${{ inputs.cli_override }}"
+        [ -z "$CLI" ] && CLI="$CLI_L2"
+        [ -z "$CLI" ] && CLI="dry-run"
+
+        MODEL="${{ inputs.model_override }}"
+        [ -z "$MODEL" ] && MODEL="$MODEL_L2"
+        [ -z "$MODEL" ] && MODEL="dry-run"
+
+        # nivel 1: allowlist manda em tudo
+        APPROVED=$(yq -r ".clis.\"$CLI\".approved // false" "$PLAT/config/allowlist.yml")
+        if [ "$APPROVED" != "true" ]; then
+          echo "::error::CLI '$CLI' nao esta aprovado na allowlist (nivel 1)"
+          exit 1
+        fi
+
+        ALLOWED=$(yq -r ".models.\"$ROLE\" | contains([\"$MODEL\"])" "$PLAT/config/allowlist.yml")
+        if [ "$ALLOWED" != "true" ]; then
+          echo "::error::Modelo '$MODEL' nao permitido para o papel '$ROLE'"
+          exit 1
+        fi
+
+        echo "cli=$CLI"     >> "$GITHUB_OUTPUT"
+        echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+
+        echo "### run-agent" >> "$GITHUB_STEP_SUMMARY"
+        echo "| campo | valor |" >> "$GITHUB_STEP_SUMMARY"
+        echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+        echo "| papel | \`$ROLE\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| cli | \`$CLI\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| modelo | \`$MODEL\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Emitir headers de atribuicao
+      shell: bash
+      run: |
+        # Na POC o gateway esta desligado; os headers vao para o log
+        # para provar que a correlacao existe desde o primeiro dia.
+        echo "x-execution-id: ${{ inputs.execution_id }}"
+        echo "x-run-id: ${{ github.run_id }}"
+        echo "x-role: ${{ inputs.role }}"
+        echo "x-cli: ${{ steps.resolve.outputs.cli }}"
+        echo "x-model: ${{ steps.resolve.outputs.model }}"
+        echo "x-repo: ${{ github.repository }}"
+
+    - name: Despachar para o adapter
+      id: dispatch
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+        CLI: ${{ steps.resolve.outputs.cli }}
+        MODEL: ${{ steps.resolve.outputs.model }}
+        EXECUTION_ID: ${{ inputs.execution_id }}
+        PROMPT: ${{ inputs.prompt }}
+        PLATFORM_PATH: ${{ inputs.platform_path }}
+      run: |
+        set -euo pipefail
+        PLAT="${{ inputs.platform_path }}"
+        ADAPTER=$(yq -r ".clis.\"$CLI\".adapter" "$PLAT/config/allowlist.yml")
+        SKILL="$PLAT/skills/$ROLE.md"
+
+        if [ ! -f "$SKILL" ]; then
+          echo "::error::Contrato de papel nao encontrado: $SKILL"
+          exit 1
+        fi
+
+        chmod +x "$PLAT/$ADAPTER"
+        export SKILL_FILE="$SKILL"
+        RESULT=$("$PLAT/$ADAPTER")
+
+        {
+          echo "result<<AGENTEOF"
+          echo "$RESULT"
+          echo "AGENTEOF"
+        } >> "$GITHUB_OUTPUT"
