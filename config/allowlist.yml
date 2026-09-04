@@ -27,11 +27,11 @@ clis:
     adapter: actions/run-agent/adapters/claude-code.sh
 
 models:
-  po:            [dry-run, claude-sonnet-4-6, gpt-5-mini]
-  lead-swe:      [dry-run, claude-opus-5, claude-sonnet-4-6]
-  frontend-swe:  [dry-run, claude-sonnet-4-6, gpt-5]
-  backend-swe:   [dry-run, claude-sonnet-4-6, gpt-5]
-  qa:            [dry-run, claude-sonnet-4-6]
+  po:                     [dry-run, claude-sonnet-4-6, gpt-5-mini]
+  tech-lead:               [dry-run, claude-opus-5, claude-sonnet-4-6]
+  react-engineer:          [dry-run, claude-sonnet-4-6, gpt-5]
+  node-fastify-engineer:   [dry-run, claude-sonnet-4-6, gpt-5]
+  qa:                      [dry-run, claude-sonnet-4-6]
 
 budgets:
   default_usd_per_demand: 5
@@ -39,7 +39,6 @@ budgets:
   max_retries_per_role: 2
 
 gateway:
-  # na POC nao ha gateway real; os headers sao apenas emitidos no log
   enabled: false
   required_headers:
     - execution-id
