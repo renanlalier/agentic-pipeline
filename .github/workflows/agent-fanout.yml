@@ -32,73 +32,78 @@ jobs:
       issues: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Checkout da platform
-        uses: actions/checkout@v4
-        with:
-          repository: renanlalier/poc-agentic-platform
-          ref: v1
-          path: .platform
+      - uses: actions/checkout@v5
 
       - name: Recuperar o escopo aprovado
-        id: escopo
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
         run: |
           set -euo pipefail
+
           # o escopo aprovado e a ultima tabela publicada pela etapa anterior
-          gh issue view ${{ inputs.issue_number }} --repo ${{ github.repository }} \
-            --json comments --jq '.comments[-1].body' > escopo.md
+          gh issue view "$ISSUE" --repo "$REPO" \
+            --json comments --jq '[.comments[] | select(.body | contains("Escopo proposto pela pipe"))] | last | .body' \
+            > escopo.md
 
-          grep -oP '^\| `\K[a-z0-9-]+(?=` \| `[a-z-]+`)' escopo.md > repos.txt || true
-          grep -oP '^\| `[a-z0-9-]+` \| `\K[a-z-]+(?=`)' escopo.md > roles.txt || true
+          # extrai "repo|papel" das linhas da tabela markdown
+          awk -F'|' '/^\| `/ {
+            gsub(/[` ]/, "", $2); gsub(/[` ]/, "", $3);
+            if ($2 != "" && $2 != "repositorio") print $2 "|" $3
+          }' escopo.md > escopo.txt
 
-          if [ ! -s repos.txt ]; then
+          if [ ! -s escopo.txt ]; then
             echo "::error::Nao foi possivel recuperar o escopo aprovado da issue."
+            echo "--- comentario lido ---"; cat escopo.md
             exit 1
           fi
 
-          echo "Repositorios no escopo:"; cat repos.txt
+          echo "--- escopo aprovado ---"; cat escopo.txt
 
       - name: Criar sub-issues cross-repo e disparar
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           OWNER: ${{ github.repository_owner }}
+          PARENT_REPO_FULL: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+          EXEC_ID: ${{ inputs.execution_id }}
+          CLI_OVERRIDE: ${{ inputs.cli_override }}
+          MODEL_OVERRIDE: ${{ inputs.model_override }}
         run: |
           set -euo pipefail
+          PARENT_REPO="${PARENT_REPO_FULL#*/}"
 
-          PARENT_TITLE=$(gh issue view ${{ inputs.issue_number }} \
-            --repo ${{ github.repository }} --json title --jq .title)
-          PARENT_BODY=$(gh issue view ${{ inputs.issue_number }} \
-            --repo ${{ github.repository }} --json body --jq .body)
+          gh issue view "$ISSUE" --repo "$PARENT_REPO_FULL" \
+            --json title,body > parent.json
+          PARENT_TITLE=$(jq -r .title parent.json)
+          jq -r '.body // ""' parent.json > parent_body.txt
 
           # node_id da issue pai, necessario para a mutation addSubIssue
           PARENT_ID=$(gh api graphql -f query='
             query($owner:String!,$repo:String!,$num:Int!){
               repository(owner:$owner,name:$repo){ issue(number:$num){ id } }
-            }' -f owner="$OWNER" -f repo="${{ github.event.repository.name }}" \
-               -F num=${{ inputs.issue_number }} --jq '.data.repository.issue.id')
+            }' -f owner="$OWNER" -f repo="$PARENT_REPO" -F num="$ISSUE" \
+               --jq '.data.repository.issue.id')
 
-          paste -d: repos.txt roles.txt | while IFS=: read -r REPO ROLE; do
+          while IFS='|' read -r REPO ROLE; do
+            [ -z "$REPO" ] && continue
             echo "::group::$REPO ($ROLE)"
 
-            BODY=$(cat <<EOF
-          Sub-issue gerada pela pipe agentica.
-
-          **Demanda de origem:** $OWNER/${{ github.event.repository.name }}#${{ inputs.issue_number }}
-          **execution_id:** \`${{ inputs.execution_id }}\`
-          **papel:** \`$ROLE\`
-
-          ---
-
-          $PARENT_BODY
-          EOF
-            )
+            {
+              echo "Sub-issue gerada pela pipe agentica."
+              echo ""
+              echo "**Demanda de origem:** $OWNER/$PARENT_REPO#$ISSUE"
+              echo "**execution_id:** \`$EXEC_ID\`"
+              echo "**papel:** \`$ROLE\`"
+              echo ""
+              echo "---"
+              echo ""
+              cat parent_body.txt
+            } > child_body.md
 
             CHILD_URL=$(gh issue create --repo "$OWNER/$REPO" \
-              --title "[$ROLE] $PARENT_TITLE" \
-              --body "$BODY")
+              --title "[$ROLE] $PARENT_TITLE" --body-file child_body.md)
             CHILD_NUM="${CHILD_URL##*/}"
             echo "sub-issue criada: $CHILD_URL"
 
@@ -114,30 +119,31 @@ jobs:
                 addSubIssue(input:{issueId:$parent, subIssueId:$child}){
                   issue { number }
                 }
-              }' -f parent="$PARENT_ID" -f child="$CHILD_ID" \
-              --header 'GraphQL-Features: sub_issues' >/dev/null
+              }' -f parent="$PARENT_ID" -f child="$CHILD_ID" >/dev/null
             echo "linkada como sub-issue da pai"
 
             # disparar o workflow do repo de produto
             gh api "repos/$OWNER/$REPO/dispatches" \
               -f event_type=agent-dev \
-              -F "client_payload[execution_id]=${{ inputs.execution_id }}" \
-              -F "client_payload[sub_issue]=$CHILD_NUM" \
-              -F "client_payload[role]=$ROLE" \
-              -F "client_payload[contract_ref]=v1" \
-              -F "client_payload[cli_override]=${{ inputs.cli_override }}" \
-              -F "client_payload[model_override]=${{ inputs.model_override }}"
+              -f "client_payload[execution_id]=$EXEC_ID" \
+              -f "client_payload[sub_issue]=$CHILD_NUM" \
+              -f "client_payload[role]=$ROLE" \
+              -f "client_payload[contract_ref]=v1" \
+              -f "client_payload[cli_override]=$CLI_OVERRIDE" \
+              -f "client_payload[model_override]=$MODEL_OVERRIDE"
             echo "repository_dispatch enviado"
             echo "::endgroup::"
-          done
+          done < escopo.txt
 
       - name: Atualizar estado da issue pai
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
         run: |
-          gh issue edit ${{ inputs.issue_number }} --repo ${{ github.repository }} \
+          gh issue edit "$ISSUE" --repo "$REPO" \
             --add-label "estado/implementando" \
             --remove-label "estado/aguardando-escopo" || true
 
-          gh issue comment ${{ inputs.issue_number }} --repo ${{ github.repository }} \
-            --body "Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Acompanhe pelo progresso das sub-issues acima."
+          gh issue comment "$ISSUE" --repo "$REPO" \
+            --body "Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Repare que eles terminam fora de ordem e nenhum sabe do outro."
