@@ -10,6 +10,13 @@
 #
 # Este adapter usa o fallback de selecao por keyword (lib/skills.sh) para
 # DEMONSTRAR o mecanismo de carregamento sob demanda, sem custo de token.
+#
+# Para o papel tech-lead: como este adapter nao tem julgamento semantico
+# real (nao chama modelo), ele nao tenta decidir relevancia - segue a
+# propria politica do system.md ("na duvida, inclua") no seu caso
+# extremo: propoe TODOS os repos elegiveis que aparecem no fingerprint
+# recebido no prompt, e diz explicitamente que isso e uma proposta
+# conservadora de modo dry-run, nao um julgamento real.
 set -euo pipefail
 
 : "${ROLE:?}"
@@ -39,19 +46,43 @@ fi
 N_SKILLS=$(echo "$SELECTED_SKILLS" | grep -c '^## \[skill:' || true)
 
 case "$ROLE" in
-  lead-swe)
-    cat <<JSON
-{
-  "role": "$ROLE",
-  "execution_id": "$EXECUTION_ID",
-  "status": "ok",
-  "summary": "Plano tecnico gerado em modo dry-run ($N_SKILLS skill(s) carregada(s) por keyword)",
-  "contract_ref": "v1",
-  "notes": "adapter dry-run: system, skills selecionadas e mcp foram resolvidos separadamente do prompt; nenhuma chamada de modelo foi feita"
-}
-JSON
+  tech-lead)
+    # Extrai "### nome-do-repo" e "papel logico sugerido: X" do fingerprint
+    # que o workflow embutiu no prompt. Sem modelo real, nao ha como
+    # avaliar RELEVANCIA - so ha como listar o que existe. Proposta
+    # conservadora: todos entram, com nota honesta sobre a limitacao.
+    REPOS_JSON="[]"
+    CURRENT_NAME=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^\#\#\#\ (.+)$ ]]; then
+        CURRENT_NAME="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^papel\ logico\ sugerido:\ (.+)$ ]] && [ -n "$CURRENT_NAME" ]; then
+        CURRENT_ROLE="${BASH_REMATCH[1]}"
+        REPOS_JSON=$(echo "$REPOS_JSON" | jq --arg n "$CURRENT_NAME" --arg r "$CURRENT_ROLE" \
+          '. + [{"name":$n,"role":$r,"reason":"modo dry-run: sem chamada de modelo, logo sem julgamento semantico real - proposta conservadora inclui todos os repos elegiveis do fingerprint"}]')
+        CURRENT_NAME=""
+      fi
+    done <<< "$PROMPT"
+
+    N_FOUND=$(echo "$REPOS_JSON" | jq 'length')
+    echo "repos encontrados no fingerprint (modo dry-run, sem julgamento): $N_FOUND" >&2
+
+    jq -n \
+      --arg role "$ROLE" \
+      --arg exec_id "$EXECUTION_ID" \
+      --argjson repos "$REPOS_JSON" \
+      --arg n_skills "$N_SKILLS" \
+      '{
+        role: $role,
+        execution_id: $exec_id,
+        status: "ok",
+        summary: ("Proposta conservadora em modo dry-run (" + ($repos | length | tostring) + " repo(s) do fingerprint, " + $n_skills + " skill(s) carregada(s) por keyword)"),
+        repos: $repos,
+        contract_ref: "v1",
+        notes: "adapter dry-run nao tem julgamento semantico - roda com CLI real (cursor/codex) para uma proposta que de fato analisa o fingerprint de cada repo"
+      }'
     ;;
-  frontend-swe|backend-swe)
+  frontend-engineer|backend-engineer)
     cat <<JSON
 {
   "role": "$ROLE",
