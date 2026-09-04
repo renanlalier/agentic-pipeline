@@ -11,6 +11,15 @@ name: agent-brainstorm (reusable)
 #                      agent-lead existente, que propoe os repos)
 # status "escalated" -> posta o motivo e para (numero de rodadas estourou
 #                      ou o humano pediu para cancelar)
+#
+# IMPORTANTE: como a autenticacao usa PAT pessoal (nao um GitHub App
+# bot), todo comentario postado pela pipe aparece com o MESMO usuario
+# de quem abriu a issue - nao da para distinguir por login. Por isso
+# todo comentario que este workflow posta carrega o marcador HTML
+# invisivel <!-- pipe:brainstorm --> no final, e o caller (on-issue.yml)
+# usa esse marcador para NAO re-disparar o brainstorm quando o proprio
+# comentario da pipe chega via issue_comment.created. Sem isso, a pipe
+# entraria em loop respondendo a si mesma.
 
 on:
   workflow_call:
@@ -73,7 +82,9 @@ jobs:
             echo ""
             if [ "$N" -gt 0 ]; then
               echo "## Conversa ate agora ($N comentario(s), em ordem)"
-              jq -r '.[] | "**\(.user.login) (\(.user.type)):**\n\(.body)\n"' comments.json
+              echo "Comentarios marcados com [PIPE] sao seus proprios turnos"
+              echo "anteriores; os demais sao do humano."
+              jq -r '.[] | (if (.body | contains("<!-- pipe:brainstorm -->")) then "**[PIPE]**" else "**[HUMANO] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
             else
               echo "## Conversa ate agora"
               echo "(nenhum comentario ainda - este e o primeiro turno)"
@@ -81,9 +92,9 @@ jobs:
             echo ""
             echo "## Instrucao"
             echo "Aplique a skill brainstorming. Se ainda faltar clareza, faca"
-            echo "UMA pergunta. Se o ultimo comentario humano aprovou um escopo"
-            echo "que voce mesmo apresentou num turno anterior, conclua com"
-            echo "status approved e preencha o campo escopo."
+            echo "UMA pergunta. Se o ultimo comentario HUMANO aprovou um escopo"
+            echo "que voce mesmo apresentou num turno [PIPE] anterior, conclua"
+            echo "com status approved e preencha o campo escopo."
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -131,6 +142,7 @@ jobs:
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming_"
+                echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
@@ -166,6 +178,7 @@ jobs:
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL) · fase: brainstorming concluido_"
+                echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
@@ -184,6 +197,7 @@ jobs:
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)_"
+                echo "<!-- pipe:brainstorm -->"
               } > comment.md
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
