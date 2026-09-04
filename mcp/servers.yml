@@ -13,10 +13,13 @@ servers:
     remote:
       transport: http
       url: https://mcp.context7.com/mcp
-      # header opcional - sem chave funciona em rate limit basico
+      # OPCIONAL. O Context7 funciona sem chave nenhuma (rate limit
+      # basico). A chave so eleva o limite - nao e requisito para a POC.
+      # Se CONTEXT7_API_KEY estiver setada no ambiente do job, os
+      # adapters enviam; se nao estiver, conectam sem header nenhum.
       api_key_header: CONTEXT7_API_KEY
       api_key_env: CONTEXT7_API_KEY
     local_fallback:
-      # usado por CLIs que so suportam stdio, ou quando remoto falha
+      # usado apenas se o adapter preferir stdio em vez de HTTP remoto
       command: npx
       args: ["-y", "@upstash/context7-mcp"]
