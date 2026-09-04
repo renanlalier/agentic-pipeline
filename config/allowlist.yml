@@ -2,6 +2,11 @@ version: 1
 
 # Nivel 1 da configuracao. Editado por Platform Engineering + Security.
 # O .agentic/config.yml de cada repo so pode escolher DENTRO desta lista.
+#
+# Os papeis abaixo sao generalistas de proposito - frontend-engineer e
+# backend-engineer nao carregam nome de framework. A capacidade de stack
+# (React, Kotlin/Ktor, o que vier depois) mora nas skills de cada papel,
+# nao no nome do papel. Ver agents/<papel>/skills/.
 
 providers:
   anthropic:
@@ -27,11 +32,11 @@ clis:
     adapter: actions/run-agent/adapters/claude-code.sh
 
 models:
-  po:                     [dry-run, claude-sonnet-4-6, gpt-5-mini]
-  tech-lead:               [dry-run, claude-opus-5, claude-sonnet-4-6]
-  react-engineer:          [dry-run, claude-sonnet-4-6, gpt-5]
-  node-fastify-engineer:   [dry-run, claude-sonnet-4-6, gpt-5]
-  qa:                      [dry-run, claude-sonnet-4-6]
+  po:                  [dry-run, claude-sonnet-4-6, gpt-5-mini]
+  tech-lead:            [dry-run, claude-opus-5, claude-sonnet-4-6]
+  frontend-engineer:    [dry-run, claude-sonnet-4-6, gpt-5]
+  backend-engineer:     [dry-run, claude-sonnet-4-6, gpt-5]
+  qa:                   [dry-run, claude-sonnet-4-6]
 
 budgets:
   default_usd_per_demand: 5
