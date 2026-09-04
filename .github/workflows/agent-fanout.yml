@@ -1,0 +1,143 @@
+name: agent-fanout (reusable)
+
+# Passo 3 do fluxo, DEPOIS do HITL 1. Roda no repo de INTAKE.
+# Cria uma sub-issue cross-repo por repositorio aprovado e dispara
+# o workflow de cada um. E aqui que se valida o cross-repo de verdade.
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      execution_id:
+        required: true
+        type: string
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PIPE_TOKEN:
+        required: true
+
+jobs:
+  fanout:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout da platform
+        uses: actions/checkout@v4
+        with:
+          repository: renanlalier/poc-agentic-platform
+          ref: v1
+          path: .platform
+
+      - name: Recuperar o escopo aprovado
+        id: escopo
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # o escopo aprovado e a ultima tabela publicada pela etapa anterior
+          gh issue view ${{ inputs.issue_number }} --repo ${{ github.repository }} \
+            --json comments --jq '.comments[-1].body' > escopo.md
+
+          grep -oP '^\| `\K[a-z0-9-]+(?=` \| `[a-z-]+`)' escopo.md > repos.txt || true
+          grep -oP '^\| `[a-z0-9-]+` \| `\K[a-z-]+(?=`)' escopo.md > roles.txt || true
+
+          if [ ! -s repos.txt ]; then
+            echo "::error::Nao foi possivel recuperar o escopo aprovado da issue."
+            exit 1
+          fi
+
+          echo "Repositorios no escopo:"; cat repos.txt
+
+      - name: Criar sub-issues cross-repo e disparar
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          PARENT_TITLE=$(gh issue view ${{ inputs.issue_number }} \
+            --repo ${{ github.repository }} --json title --jq .title)
+          PARENT_BODY=$(gh issue view ${{ inputs.issue_number }} \
+            --repo ${{ github.repository }} --json body --jq .body)
+
+          # node_id da issue pai, necessario para a mutation addSubIssue
+          PARENT_ID=$(gh api graphql -f query='
+            query($owner:String!,$repo:String!,$num:Int!){
+              repository(owner:$owner,name:$repo){ issue(number:$num){ id } }
+            }' -f owner="$OWNER" -f repo="${{ github.event.repository.name }}" \
+               -F num=${{ inputs.issue_number }} --jq '.data.repository.issue.id')
+
+          paste -d: repos.txt roles.txt | while IFS=: read -r REPO ROLE; do
+            echo "::group::$REPO ($ROLE)"
+
+            BODY=$(cat <<EOF
+          Sub-issue gerada pela pipe agentica.
+
+          **Demanda de origem:** $OWNER/${{ github.event.repository.name }}#${{ inputs.issue_number }}
+          **execution_id:** \`${{ inputs.execution_id }}\`
+          **papel:** \`$ROLE\`
+
+          ---
+
+          $PARENT_BODY
+          EOF
+            )
+
+            CHILD_URL=$(gh issue create --repo "$OWNER/$REPO" \
+              --title "[$ROLE] $PARENT_TITLE" \
+              --body "$BODY")
+            CHILD_NUM="${CHILD_URL##*/}"
+            echo "sub-issue criada: $CHILD_URL"
+
+            CHILD_ID=$(gh api graphql -f query='
+              query($owner:String!,$repo:String!,$num:Int!){
+                repository(owner:$owner,name:$repo){ issue(number:$num){ id } }
+              }' -f owner="$OWNER" -f repo="$REPO" -F num="$CHILD_NUM" \
+                 --jq '.data.repository.issue.id')
+
+            # linkar como sub-issue da pai - cross-repo
+            gh api graphql -f query='
+              mutation($parent:ID!,$child:ID!){
+                addSubIssue(input:{issueId:$parent, subIssueId:$child}){
+                  issue { number }
+                }
+              }' -f parent="$PARENT_ID" -f child="$CHILD_ID" \
+              --header 'GraphQL-Features: sub_issues' >/dev/null
+            echo "linkada como sub-issue da pai"
+
+            # disparar o workflow do repo de produto
+            gh api "repos/$OWNER/$REPO/dispatches" \
+              -f event_type=agent-dev \
+              -F "client_payload[execution_id]=${{ inputs.execution_id }}" \
+              -F "client_payload[sub_issue]=$CHILD_NUM" \
+              -F "client_payload[role]=$ROLE" \
+              -F "client_payload[contract_ref]=v1" \
+              -F "client_payload[cli_override]=${{ inputs.cli_override }}" \
+              -F "client_payload[model_override]=${{ inputs.model_override }}"
+            echo "repository_dispatch enviado"
+            echo "::endgroup::"
+          done
+
+      - name: Atualizar estado da issue pai
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+        run: |
+          gh issue edit ${{ inputs.issue_number }} --repo ${{ github.repository }} \
+            --add-label "estado/implementando" \
+            --remove-label "estado/aguardando-escopo" || true
+
+          gh issue comment ${{ inputs.issue_number }} --repo ${{ github.repository }} \
+            --body "Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Acompanhe pelo progresso das sub-issues acima."
