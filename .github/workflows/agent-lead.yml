@@ -1,0 +1,159 @@
+name: agent-lead (reusable)
+
+# Passo 2-3 do fluxo. Roda no repo de INTAKE.
+# Le a issue, cruza com o capability-map e PROPOE o escopo de repositorios.
+# Nao cria sub-issue: isso so acontece depois da aprovacao humana (HITL 1).
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      execution_id:
+        required: true
+        type: string
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PIPE_TOKEN:
+        required: true
+
+jobs:
+  propor-escopo:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout do repo consumidor
+        uses: actions/checkout@v4
+
+      - name: Checkout da platform
+        uses: actions/checkout@v4
+        with:
+          repository: renanlalier/poc-agentic-platform
+          ref: v1
+          path: .platform
+
+      - name: Instalar yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Ler a issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh issue view ${{ inputs.issue_number }} \
+            --repo ${{ github.repository }} \
+            --json title,body > issue.json
+          {
+            echo "text<<EOF"
+            jq -r '.title + "\n" + .body' issue.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Casar demanda com o capability map
+        id: escopo
+        run: |
+          set -euo pipefail
+          TEXT=$(echo "${{ steps.issue.outputs.text }}" | tr '[:upper:]' '[:lower:]' \
+                 | iconv -f utf8 -t ascii//TRANSLIT)
+          MAP=.platform/config/capability-map.yml
+          MATCHED=""
+
+          N=$(yq -r '.domains | length' "$MAP")
+          for i in $(seq 0 $((N-1))); do
+            DOMAIN=$(yq -r ".domains[$i].name" "$MAP")
+            KW_COUNT=$(yq -r ".domains[$i].keywords | length" "$MAP")
+            HIT=0
+            for k in $(seq 0 $((KW_COUNT-1))); do
+              KW=$(yq -r ".domains[$i].keywords[$k]" "$MAP" | tr '[:upper:]' '[:lower:]')
+              if echo "$TEXT" | grep -qi -- "$KW"; then HIT=1; break; fi
+            done
+            if [ "$HIT" = "1" ]; then
+              REPO=$(yq -r ".domains[$i].repos[0].name" "$MAP")
+              ROLE=$(yq -r ".domains[$i].repos[0].role" "$MAP")
+              MATCHED="$MATCHED$REPO:$ROLE:$DOMAIN "
+              echo "casou dominio '$DOMAIN' -> repo '$REPO'"
+            fi
+          done
+
+          # aplicar regras de propagacao (implies)
+          IN=$(yq -r '.implies | length' "$MAP")
+          for i in $(seq 0 $((IN-1))); do
+            WHEN=$(yq -r ".implies[$i].when" "$MAP")
+            if echo "$MATCHED" | grep -q "^$WHEN:\|  *$WHEN:"; then
+              LIKELY=$(yq -r ".implies[$i].likely[0]" "$MAP")
+              if ! echo "$MATCHED" | grep -q "$LIKELY:"; then
+                ROLE=$(yq -r ".domains[] | select(.repos[0].name == \"$LIKELY\") | .repos[0].role" "$MAP")
+                REASON=$(yq -r ".implies[$i].reason" "$MAP")
+                MATCHED="$MATCHED$LIKELY:$ROLE:propagacao "
+                echo "propagacao: $WHEN implica $LIKELY ($REASON)"
+              fi
+            fi
+          done
+
+          if [ -z "$MATCHED" ]; then
+            echo "::error::Nenhum dominio do capability map casou com a demanda. Stop condition."
+            exit 1
+          fi
+
+          echo "matched=$MATCHED" >> "$GITHUB_OUTPUT"
+
+      - name: Executar o papel lead-swe
+        id: agent
+        uses: ./.platform/actions/run-agent
+        with:
+          role: lead-swe
+          cli_override: ${{ inputs.cli_override }}
+          model_override: ${{ inputs.model_override }}
+          execution_id: ${{ inputs.execution_id }}
+          prompt: ${{ steps.issue.outputs.text }}
+          platform_path: .platform
+
+      - name: Publicar proposta de escopo na issue
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Escopo proposto pela pipe"
+            echo ""
+            echo "\`execution_id\`: \`${{ inputs.execution_id }}\`"
+            echo "\`cli\`: \`${{ steps.agent.outputs.cli }}\` · \`model\`: \`${{ steps.agent.outputs.model }}\`"
+            echo "[run desta etapa](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo ""
+            echo "| repositorio | papel | por que entrou |"
+            echo "|---|---|---|"
+            for entry in ${{ steps.escopo.outputs.matched }}; do
+              REPO="${entry%%:*}"
+              REST="${entry#*:}"
+              ROLE="${REST%%:*}"
+              WHY="${REST#*:}"
+              echo "| \`$REPO\` | \`$ROLE\` | $WHY |"
+            done
+            echo ""
+            echo "---"
+            echo "**HITL 1 — aprovacao de escopo.**"
+            echo "Aplique a label \`escopo-aprovado\` para a pipe criar as sub-issues"
+            echo "e disparar a implementacao. Corrija a lista acima antes, se necessario."
+          } > comment.md
+
+          gh issue comment ${{ inputs.issue_number }} \
+            --repo ${{ github.repository }} --body-file comment.md
+
+          gh issue edit ${{ inputs.issue_number }} \
+            --repo ${{ github.repository }} \
+            --add-label "estado/aguardando-escopo" \
+            --remove-label "estado/novo" || true
