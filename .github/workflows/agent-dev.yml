@@ -1,13 +1,14 @@
 name: agent-dev (reusable)
 
-# Passo 4 do fluxo. Roda DENTRO do repo de produto.
+# Fase de IMPLEMENTACAO. Roda DENTRO do repo de produto, disparado
+# quando a sub-issue recebe a label plano-aprovado (ou seja, depois que
+# o loop do agent-plan.yml ja convergiu com aprovacao humana explicita).
 # github.repository aqui e o repo consumidor - so o ARQUIVO veio da platform.
-# Cada um dos N repos executa este workflow em VM propria, sem ver os outros.
 #
-# Duas fases do MESMO papel, dois runs do agente:
-#   fase 1 - detalhar: usa a skill writing-plans para mapear arquivos e
-#            publicar um plano na sub-issue ANTES de tocar em codigo.
-#   fase 2 - implementar: usa o plano da fase 1 como contexto adicional.
+# execution_id e OPCIONAL: se nao vier no input, e recuperado da label
+# "execution:<id>" que o agent-fanout aplicou na sub-issue na criacao -
+# mesmo mecanismo do agent-plan.yml, porque quem dispara este workflow
+# via issues.labeled tambem nao tem acesso ao payload original.
 
 on:
   workflow_call:
@@ -15,12 +16,13 @@ on:
       role:
         required: true
         type: string
-      execution_id:
-        required: true
-        type: string
       sub_issue:
         required: true
         type: number
+      execution_id:
+        required: false
+        type: string
+        default: ""
       contract_ref:
         required: false
         type: string
@@ -33,9 +35,6 @@ on:
         required: false
         type: string
         default: ""
-    secrets:
-      PIPE_TOKEN:
-        required: false
 
 jobs:
   implementar:
@@ -63,13 +62,32 @@ jobs:
             https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      - name: Resolver execution_id (input ou label da sub-issue)
+        id: exec
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+        run: |
+          set -euo pipefail
+          EXEC_ID="${{ inputs.execution_id }}"
+          if [ -z "$EXEC_ID" ]; then
+            EXEC_ID=$(gh api "repos/$REPO/issues/$SUB_ISSUE" --jq '.labels[].name' \
+              | grep '^execution:' | sed 's/^execution://' | head -1 || true)
+          fi
+          if [ -z "$EXEC_ID" ]; then
+            echo "::error::execution_id nao veio no input e nao ha label execution:* na sub-issue."
+            exit 1
+          fi
+          echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
+
       - name: Provar o isolamento
         run: |
           echo "### Isolamento deste run" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- repositorio: \`${{ github.repository }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- run id: \`${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- execution id: \`${{ inputs.execution_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- execution id: \`${{ steps.exec.outputs.execution_id }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- runner: \`$(hostname)\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Conteudo do workspace (so este repo esta em disco):" >> "$GITHUB_STEP_SUMMARY"
@@ -85,81 +103,50 @@ jobs:
             yq -r '.constraints.forbid_paths[]?' .agentic/config.yml || true
           fi
 
-      - name: Ler a sub-issue
-        id: subissue
-        env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN || secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          SUB_ISSUE: ${{ inputs.sub_issue }}
-        run: |
-          set -euo pipefail
-          gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
-          jq -r '.title + "\n" + (.body // "")' subissue.json > subissue.txt
-
-      - name: "Fase 1 - Detalhar (skill writing-plans)"
+      - name: Ler o plano aprovado
         id: plano
-        uses: ./.platform/actions/run-agent
-        with:
-          role: ${{ inputs.role }}
-          cli_override: ${{ inputs.cli_override }}
-          model_override: ${{ inputs.model_override }}
-          execution_id: ${{ inputs.execution_id }}
-          prompt: "Use a skill writing-plans. Antes de qualquer edicao, mapeie os arquivos deste repositorio que a sub-issue #${{ inputs.sub_issue }} vai tocar e escreva um plano de tarefas pequenas, com caminho de arquivo exato e criterio de verificacao. Nao implemente ainda - so publique o plano. Sub-issue:\n\n$(cat subissue.txt)"
-          platform_path: .platform
-
-      - name: Publicar o plano na sub-issue (REST)
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SUB_ISSUE: ${{ inputs.sub_issue }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          cat <<'PLANOEOF' > plano_result.json
-          ${{ steps.plano.outputs.result }}
-          PLANOEOF
+          PLANO=$(gh api "repos/$REPO/issues/$SUB_ISSUE/comments" \
+            --jq '[.[] | select(.body | contains("<!-- pipe:plano-final -->"))] | last | .body // ""')
 
-          # o adapter dry-run nao produz um plano de verdade (sem modelo);
-          # em produção (cursor/codex) o campo summary/notes carrega o
-          # plano detalhado. Publicamos o que veio, sempre.
-          PLANO_TEXTO=$(jq -r '(.summary // "") + "\n\n" + (.notes // "")' plano_result.json)
+          if [ -z "$PLANO" ]; then
+            echo "::warning::Nenhum plano marcado como final encontrado. Implementando sem plano explicito."
+            PLANO="(nenhum plano de detalhamento foi encontrado para esta sub-issue)"
+          fi
 
           {
-            echo "## Plano de implementação (fase de detalhamento)"
-            echo ""
-            echo "$PLANO_TEXTO"
-            echo ""
-            echo "---"
-            echo "_run: $RUN_URL_"
-          } > plano_comment.md
-          jq -Rs '{body: .}' plano_comment.md > plano_payload.json
-          gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input plano_payload.json
-
-          # arquivo local para a fase de implementacao usar como contexto extra
-          cp plano_comment.md plano_para_implementacao.md
+            echo "plano<<PLANOEOF"
+            echo "$PLANO"
+            echo "PLANOEOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Criar branch de trabalho
         env:
-          EXEC_ID: ${{ inputs.execution_id }}
+          EXEC_ID: ${{ steps.exec.outputs.execution_id }}
         run: |
           git config user.name  "agentic-${{ inputs.role }}"
           git config user.email "agentic@users.noreply.github.com"
           git checkout -b "agentic/$EXEC_ID"
 
-      - name: "Fase 2 - Executar o papel (implementar)"
+      - name: Executar o papel (implementacao)
         id: agent
         uses: ./.platform/actions/run-agent
         with:
           role: ${{ inputs.role }}
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
-          execution_id: ${{ inputs.execution_id }}
-          prompt: "Implemente a sub-issue #${{ inputs.sub_issue }} deste repositorio, respeitando o contrato ${{ inputs.contract_ref }} e o plano que voce publicou na fase de detalhamento:\n\n$(cat plano_para_implementacao.md)"
+          execution_id: ${{ steps.exec.outputs.execution_id }}
+          prompt: "Implemente a sub-issue #${{ inputs.sub_issue }} deste repositorio, respeitando o contrato ${{ inputs.contract_ref }} e o plano ja aprovado abaixo. Nao reabra decisoes de decomposicao ja fechadas no plano - implemente o que ele descreve.\n\n${{ steps.plano.outputs.plano }}"
           platform_path: .platform
 
       - name: Materializar a alteracao
         env:
-          EXEC_ID: ${{ inputs.execution_id }}
+          EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           ROLE: ${{ inputs.role }}
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
@@ -188,7 +175,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          EXEC_ID: ${{ inputs.execution_id }}
+          EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           ROLE: ${{ inputs.role }}
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
@@ -210,7 +197,7 @@ jobs:
             echo "Closes #$SUB_ISSUE"
             echo ""
             echo "---"
-            echo "**HITL 2** — este PR precisa de review humano. O App que abriu nao pode aprovar."
+            echo "**HITL 3** — este PR precisa de review humano. O App que abriu nao pode aprovar."
           } > pr_body.md
 
           jq -n \
