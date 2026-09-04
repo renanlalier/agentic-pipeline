@@ -2,7 +2,11 @@ name: agent-fanout (reusable)
 
 # Passo 3 do fluxo, DEPOIS do HITL 1. Roda no repo de INTAKE.
 # Cria uma sub-issue cross-repo por repositorio aprovado e dispara
-# o workflow de cada um. E aqui que se valida o cross-repo de verdade.
+# o workflow de cada um.
+#
+# NOTA: tudo aqui e REST puro via `gh api`, incluindo o link de sub-issue
+# (endpoint /issues/{n}/sub_issues, nao a mutation GraphQL addSubIssue).
+# Tokens fine-grained tem suporte incompleto ao GraphQL do GitHub.
 
 on:
   workflow_call:
@@ -42,12 +46,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # o escopo aprovado e a ultima tabela publicada pela etapa anterior
-          gh issue view "$ISSUE" --repo "$REPO" \
-            --json comments --jq '[.comments[] | select(.body | contains("Escopo proposto pela pipe"))] | last | .body' \
+          gh api "repos/$REPO/issues/$ISSUE/comments" \
+            --jq '[.[] | select(.body | contains("Escopo proposto pela pipe"))] | last | .body' \
             > escopo.md
 
-          # extrai "repo|papel" das linhas da tabela markdown
           awk -F'|' '/^\| `/ {
             gsub(/[` ]/, "", $2); gsub(/[` ]/, "", $3);
             if ($2 != "" && $2 != "repositorio") print $2 "|" $3
@@ -74,17 +76,9 @@ jobs:
           set -euo pipefail
           PARENT_REPO="${PARENT_REPO_FULL#*/}"
 
-          gh issue view "$ISSUE" --repo "$PARENT_REPO_FULL" \
-            --json title,body > parent.json
+          gh api "repos/$PARENT_REPO_FULL/issues/$ISSUE" > parent.json
           PARENT_TITLE=$(jq -r .title parent.json)
           jq -r '.body // ""' parent.json > parent_body.txt
-
-          # node_id da issue pai, necessario para a mutation addSubIssue
-          PARENT_ID=$(gh api graphql -f query='
-            query($owner:String!,$repo:String!,$num:Int!){
-              repository(owner:$owner,name:$repo){ issue(number:$num){ id } }
-            }' -f owner="$OWNER" -f repo="$PARENT_REPO" -F num="$ISSUE" \
-               --jq '.data.repository.issue.id')
 
           while IFS='|' read -r REPO ROLE; do
             [ -z "$REPO" ] && continue
@@ -102,27 +96,20 @@ jobs:
               cat parent_body.txt
             } > child_body.md
 
-            CHILD_URL=$(gh issue create --repo "$OWNER/$REPO" \
-              --title "[$ROLE] $PARENT_TITLE" --body-file child_body.md)
-            CHILD_NUM="${CHILD_URL##*/}"
-            echo "sub-issue criada: $CHILD_URL"
+            jq -n --arg title "[$ROLE] $PARENT_TITLE" \
+                  --rawfile body child_body.md \
+                  '{title: $title, body: $body}' > create_payload.json
 
-            CHILD_ID=$(gh api graphql -f query='
-              query($owner:String!,$repo:String!,$num:Int!){
-                repository(owner:$owner,name:$repo){ issue(number:$num){ id } }
-              }' -f owner="$OWNER" -f repo="$REPO" -F num="$CHILD_NUM" \
-                 --jq '.data.repository.issue.id')
+            gh api "repos/$OWNER/$REPO/issues" --input create_payload.json > child.json
+            CHILD_NUM=$(jq -r .number child.json)
+            CHILD_ID=$(jq -r .id child.json)
+            echo "sub-issue criada: #$CHILD_NUM em $OWNER/$REPO"
 
-            # linkar como sub-issue da pai - cross-repo
-            gh api graphql -f query='
-              mutation($parent:ID!,$child:ID!){
-                addSubIssue(input:{issueId:$parent, subIssueId:$child}){
-                  issue { number }
-                }
-              }' -f parent="$PARENT_ID" -f child="$CHILD_ID" >/dev/null
+            # link cross-repo via REST (endpoint de sub-issues, nao GraphQL)
+            gh api "repos/$PARENT_REPO_FULL/issues/$ISSUE/sub_issues" \
+              -F "sub_issue_id=$CHILD_ID" >/dev/null
             echo "linkada como sub-issue da pai"
 
-            # disparar o workflow do repo de produto
             gh api "repos/$OWNER/$REPO/dispatches" \
               -f event_type=agent-dev \
               -f "client_payload[execution_id]=$EXEC_ID" \
@@ -141,9 +128,12 @@ jobs:
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
         run: |
-          gh issue edit "$ISSUE" --repo "$REPO" \
-            --add-label "estado/implementando" \
-            --remove-label "estado/aguardando-escopo" || true
+          set -euo pipefail
 
-          gh issue comment "$ISSUE" --repo "$REPO" \
-            --body "Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Repare que eles terminam fora de ordem e nenhum sabe do outro."
+          gh api "repos/$REPO/issues/$ISSUE/labels" \
+            -f "labels[]=estado/implementando" >/dev/null
+          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/estado%2Faguardando-escopo" >/dev/null 2>&1 || true
+
+          MSG="Fan-out concluido. Cada repositorio agora roda seu proprio workflow, em VM propria, sem contexto compartilhado. Repare que eles terminam fora de ordem e nenhum sabe do outro."
+          jq -n --arg body "$MSG" '{body: $body}' > comment_payload.json
+          gh api "repos/$REPO/issues/$ISSUE/comments" --input comment_payload.json
