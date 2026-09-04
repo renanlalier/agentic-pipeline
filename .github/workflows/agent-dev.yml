@@ -1,0 +1,151 @@
+name: agent-dev (reusable)
+
+# Passo 4 do fluxo. Roda DENTRO do repo de produto.
+# github.repository aqui e o repo consumidor - so o ARQUIVO veio da platform.
+# Cada um dos N repos executa este workflow em VM propria, sem ver os outros.
+
+on:
+  workflow_call:
+    inputs:
+      role:
+        required: true
+        type: string
+      execution_id:
+        required: true
+        type: string
+      sub_issue:
+        required: true
+        type: number
+      contract_ref:
+        required: false
+        type: string
+        default: "v1"
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PIPE_TOKEN:
+        required: false
+
+jobs:
+  implementar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout deste repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout da platform
+        uses: actions/checkout@v4
+        with:
+          repository: renanlalier/poc-agentic-platform
+          ref: v1
+          path: .platform
+
+      - name: Instalar yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Provar o isolamento
+        run: |
+          echo "### Isolamento deste run" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- repositorio: \`${{ github.repository }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- run id: \`${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- execution id: \`${{ inputs.execution_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- runner: \`$(hostname)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Conteudo do workspace (so este repo esta em disco):" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -1 | grep -v '^\.platform$' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verificar limites do repo
+        run: |
+          set -euo pipefail
+          if [ -f .agentic/config.yml ]; then
+            echo "Caminhos proibidos para o agente neste repo:"
+            yq -r '.constraints.forbid_paths[]?' .agentic/config.yml || true
+          fi
+
+      - name: Criar branch de trabalho
+        run: |
+          git config user.name  "agentic-${{ inputs.role }}"
+          git config user.email "agentic@users.noreply.github.com"
+          git checkout -b "agentic/${{ inputs.execution_id }}"
+
+      - name: Executar o papel
+        id: agent
+        uses: ./.platform/actions/run-agent
+        with:
+          role: ${{ inputs.role }}
+          cli_override: ${{ inputs.cli_override }}
+          model_override: ${{ inputs.model_override }}
+          execution_id: ${{ inputs.execution_id }}
+          prompt: "Implemente a sub-issue #${{ inputs.sub_issue }} deste repositorio, respeitando o contrato ${{ inputs.contract_ref }}."
+          platform_path: .platform
+
+      - name: Materializar a alteracao
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${{ inputs.execution_id }}"
+            echo ""
+            echo "- papel: \`${{ inputs.role }}\`"
+            echo "- cli: \`${{ steps.agent.outputs.cli }}\`"
+            echo "- modelo: \`${{ steps.agent.outputs.model }}\`"
+            echo "- sub-issue: #${{ inputs.sub_issue }}"
+            echo "- contrato: \`${{ inputs.contract_ref }}\`"
+            echo "- run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+          } >> CHANGELOG-agentic.md
+
+          git add CHANGELOG-agentic.md
+          git commit -m "feat: ${{ inputs.role }} para #${{ inputs.sub_issue }} (exec ${{ inputs.execution_id }})"
+          git push origin "agentic/${{ inputs.execution_id }}"
+
+      - name: Abrir pull request em draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr create --draft \
+            --title "[agentic] ${{ inputs.role }} — sub-issue #${{ inputs.sub_issue }}" \
+            --body "$(cat <<EOF
+          Gerado pela pipe agentica.
+
+          | campo | valor |
+          |---|---|
+          | execution_id | \`${{ inputs.execution_id }}\` |
+          | papel | \`${{ inputs.role }}\` |
+          | cli | \`${{ steps.agent.outputs.cli }}\` |
+          | modelo | \`${{ steps.agent.outputs.model }}\` |
+          | contrato | \`${{ inputs.contract_ref }}\` |
+
+          Closes #${{ inputs.sub_issue }}
+
+          ---
+          **HITL 2** — este PR precisa de review humano. O App que abriu nao pode aprovar.
+          EOF
+          )" \
+            --head "agentic/${{ inputs.execution_id }}" \
+            --base main
+
+      - name: Reportar na sub-issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ inputs.sub_issue }} --repo ${{ github.repository }} \
+            --body "Implementacao concluida em \`${{ github.repository }}\`. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
