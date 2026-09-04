@@ -1,14 +1,13 @@
 name: agent-lead (reusable)
 
 # Passo 2-3 do fluxo. Roda no repo de INTAKE.
-# Le a issue, cruza com o capability-map e PROPOE o escopo de repositorios.
+# Le a issue, busca o fingerprint REAL de cada repo elegivel (descricao
+# do GitHub + trecho de README) e delega ao agente Tech Lead a decisao
+# de escopo por julgamento semantico - nao por match de keyword.
 # Nao cria sub-issue: isso so acontece depois da aprovacao humana (HITL 1).
 #
 # NOTA: usamos `gh api` (REST) em vez de `gh issue comment`/`gh issue edit`.
-# Tokens fine-grained tem suporte incompleto a mutations GraphQL - varios
-# comandos do gh CLI caem em GraphQL por baixo e falham com
-# "Resource not accessible by personal access token" mesmo com a permissao
-# REST correta. REST puro evita o problema.
+# Tokens fine-grained tem suporte incompleto a mutations GraphQL.
 #
 # NOTA DE SEGURANCA: o texto da issue nunca e interpolado com ${{ }} dentro
 # de um bloco run. Ele trafega por arquivo e por env.
@@ -70,58 +69,61 @@ jobs:
           echo "--- conteudo lido da issue ---"
           cat issue.txt
 
-      - name: Casar demanda com o capability map
-        id: escopo
+      - name: Buscar fingerprint real dos repos elegiveis e montar o prompt
+        id: contexto
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           MAP=.platform/config/capability-map.yml
 
-          tr '[:upper:]' '[:lower:]' < issue.txt \
-            | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null > norm.txt || \
-            tr '[:upper:]' '[:lower:]' < issue.txt > norm.txt
+          N=$(yq -r '.repos | length' "$MAP")
+          echo "repos elegiveis no capability map: $N"
 
-          : > matched.txt
-
-          N=$(yq -r '.domains | length' "$MAP")
-          echo "dominios no mapa: $N"
-
+          : > fingerprints.md
           for i in $(seq 0 $((N-1))); do
-            DOMAIN=$(yq -r ".domains[$i].name" "$MAP")
-            REPO_NAME=$(yq -r ".domains[$i].repos[0].name" "$MAP")
-            ROLE=$(yq -r ".domains[$i].repos[0].role" "$MAP")
-            KW_COUNT=$(yq -r ".domains[$i].keywords | length" "$MAP")
+            REPO_NAME=$(yq -r ".repos[$i].name" "$MAP")
+            ROLE=$(yq -r ".repos[$i].role" "$MAP")
+            SUMMARY=$(yq -r ".repos[$i].summary" "$MAP")
 
-            for k in $(seq 0 $((KW_COUNT-1))); do
-              KW=$(yq -r ".domains[$i].keywords[$k]" "$MAP")
-              if grep -qiF -- "$KW" norm.txt; then
-                echo "$REPO_NAME|$ROLE|casou com a palavra \"$KW\" (dominio $DOMAIN)" >> matched.txt
-                echo "  match: $DOMAIN <- '$KW'"
-                break
-              fi
-            done
+            LIVE=$(gh api "repos/$OWNER/$REPO_NAME" --jq '{description: .description, language: .language}' 2>/dev/null || echo '{}')
+            DESC=$(echo "$LIVE" | jq -r '.description // "sem descricao no GitHub"')
+            LANG=$(echo "$LIVE" | jq -r '.language // "desconhecida"')
+
+            README=$(gh api "repos/$OWNER/$REPO_NAME/readme" --jq '.content' 2>/dev/null \
+              | base64 -d 2>/dev/null | head -c 500 || echo "(sem README)")
+
+            {
+              echo "### $REPO_NAME"
+              echo "papel logico sugerido: $ROLE"
+              echo "resumo de dominio (capability map): $SUMMARY"
+              echo "descricao no GitHub: $DESC"
+              echo "linguagem principal: $LANG"
+              echo "trecho do README:"
+              echo '```'
+              echo "$README"
+              echo '```'
+              echo ""
+            } >> fingerprints.md
+
+            echo "fingerprint obtido: $REPO_NAME ($LANG)"
           done
 
-          IN=$(yq -r '.implies | length' "$MAP")
-          for i in $(seq 0 $((IN-1))); do
-            WHEN=$(yq -r ".implies[$i].when" "$MAP")
-            if cut -d'|' -f1 matched.txt | grep -qx "$WHEN"; then
-              LIKELY=$(yq -r ".implies[$i].likely[0]" "$MAP")
-              if ! cut -d'|' -f1 matched.txt | grep -qx "$LIKELY"; then
-                ROLE=$(yq -r ".domains[] | select(.repos[0].name == \"$LIKELY\") | .repos[0].role" "$MAP")
-                REASON=$(yq -r ".implies[$i].reason" "$MAP")
-                echo "$LIKELY|$ROLE|propagacao a partir de \`$WHEN\`: $REASON" >> matched.txt
-                echo "  propagacao: $WHEN -> $LIKELY"
-              fi
-            fi
-          done
-
-          if [ ! -s matched.txt ]; then
-            echo "::error::Nenhum dominio do capability map casou com a demanda. Stop condition - o Lead escala em vez de adivinhar."
-            exit 1
-          fi
-
-          echo "--- escopo proposto ---"
-          cat matched.txt
+          {
+            echo "prompt<<PROMPTEOF"
+            echo "Analise a demanda abaixo e proponha quais dos repositorios"
+            echo "elegiveis listados sao afetados, com justificativa especifica"
+            echo "baseada no que voce le na descricao e no README de cada um -"
+            echo "nao em uma lista fixa de palavras-chave."
+            echo ""
+            echo "## Demanda"
+            cat issue.txt
+            echo ""
+            echo "## Repositorios elegiveis (fingerprint obtido ao vivo do GitHub)"
+            cat fingerprints.md
+            echo "PROMPTEOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Executar o papel tech-lead
         id: agent
@@ -131,8 +133,37 @@ jobs:
           cli_override: ${{ inputs.cli_override }}
           model_override: ${{ inputs.model_override }}
           execution_id: ${{ inputs.execution_id }}
-          prompt: "Propor escopo tecnico para a demanda registrada na issue."
+          prompt: ${{ steps.contexto.outputs.prompt }}
           platform_path: .platform
+
+      - name: Interpretar a decisao do agente
+        id: decisao
+        run: |
+          set -euo pipefail
+          cat <<'RESULTEOF' > agent_result.json
+          ${{ steps.agent.outputs.result }}
+          RESULTEOF
+
+          echo "--- saida do agente ---"
+          cat agent_result.json
+
+          if ! jq empty agent_result.json 2>/dev/null; then
+            echo "::error::A saida do agente nao e JSON valido. Veja o log acima."
+            exit 1
+          fi
+
+          STATUS=$(jq -r '.status' agent_result.json)
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          if [ "$STATUS" = "escalated" ]; then
+            echo "::warning::Tech Lead escalou em vez de propor escopo. Isso e o stop_condition do system.md agindo - nao um bug."
+          fi
+
+          N_REPOS=$(jq -r '.repos | length' agent_result.json)
+          if [ "$STATUS" != "escalated" ] && [ "$N_REPOS" -eq 0 ]; then
+            echo "::error::Agente retornou status ok mas nenhum repositorio proposto. Tratando como escalada."
+            echo "status=escalated" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publicar proposta de escopo na issue
         env:
@@ -142,9 +173,35 @@ jobs:
           EXEC_ID: ${{ inputs.execution_id }}
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
+          STATUS: ${{ steps.decisao.outputs.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+
+          if [ "$STATUS" = "escalated" ]; then
+            SUMMARY=$(jq -r '.summary' agent_result.json)
+            NOTES=$(jq -r '.notes' agent_result.json)
+            {
+              echo "## Tech Lead escalou esta demanda"
+              echo ""
+              echo "\`execution_id\`: \`$EXEC_ID\` · [run desta etapa]($RUN_URL)"
+              echo ""
+              echo "**Resumo:** $SUMMARY"
+              echo ""
+              echo "**Motivo:** $NOTES"
+              echo ""
+              echo "---"
+              echo "Nenhuma stop condition automatica falhou aqui - o agente"
+              echo "avaliou os repositorios elegiveis e não encontrou correspondência"
+              echo "segura com julgamento suficiente. Refine a demanda e reabra,"
+              echo "ou ajuste \`config/capability-map.yml\` se um repositorio"
+              echo "relevante estiver faltando na lista de elegiveis."
+            } > comment.md
+            jq -Rs '{body: .}' comment.md > payload.json
+            gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+            exit 1
+          fi
+
           {
             echo "## Escopo proposto pela pipe"
             echo ""
@@ -154,10 +211,7 @@ jobs:
             echo ""
             echo "| repositorio | papel | por que entrou |"
             echo "|---|---|---|"
-            while IFS='|' read -r R RO WHY; do
-              [ -z "$R" ] && continue
-              echo "| \`$R\` | \`$RO\` | $WHY |"
-            done < matched.txt
+            jq -r '.repos[] | "| `\(.name)` | `\(.role)` | \(.reason) |"' agent_result.json
             echo ""
             echo "---"
             echo "**HITL 1 — aprovacao de escopo.**"
@@ -167,8 +221,6 @@ jobs:
 
           cat comment.md
 
-          # REST puro (evita a mutation GraphQL addComment, que fine-grained
-          # PAT nao suporta de forma confiavel)
           jq -Rs '{body: .}' comment.md > payload.json
           gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
