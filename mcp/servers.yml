@@ -1,0 +1,22 @@
+version: 1
+
+# Descricao abstrata dos MCPs disponiveis. Cada adapter (cursor.sh, codex.sh,
+# claude-code.sh) traduz isto para o mecanismo de instalacao proprio do CLI -
+# nenhum deles compartilha o mesmo formato de config nativamente.
+
+servers:
+  context7:
+    description: >
+      Resolve nomes de biblioteca para IDs e busca documentacao/exemplos
+      de codigo atualizados e especificos de versao. Evita que o agente
+      alucine API de biblioteca desatualizada.
+    remote:
+      transport: http
+      url: https://mcp.context7.com/mcp
+      # header opcional - sem chave funciona em rate limit basico
+      api_key_header: CONTEXT7_API_KEY
+      api_key_env: CONTEXT7_API_KEY
+    local_fallback:
+      # usado por CLIs que so suportam stdio, ou quando remoto falha
+      command: npx
+      args: ["-y", "@upstash/context7-mcp"]
