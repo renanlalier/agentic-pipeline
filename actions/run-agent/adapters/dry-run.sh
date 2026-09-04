@@ -6,7 +6,7 @@
 #   SYSTEM_FILE          -> system.md for the role (sacred, read-only)
 #   PLATFORM_SKILLS_DIR  -> brain/skills/ in the platform repo
 #   REPO_SKILLS_DIR      -> .agentic/skills/ in the consumer repo
-#   MCP_CONFIG           -> mcp/servers.yml (abstract description)
+#   MCP_CONFIG           -> brain/mcp/servers.yml (abstract description)
 #
 # This adapter uses the keyword-based skill selection fallback (lib/skills.sh)
 # to DEMONSTRATE the on-demand skill loading mechanism without token cost.

@@ -42,7 +42,7 @@ if [ -d "${REPO_SKILLS_DIR:-}" ]; then
 fi
 echo "skills copied to .cursor/skills/: $(find .cursor/skills -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" >&2
 
-# --- MCP: translate mcp/servers.yml to .cursor/mcp.json and enable ---
+# --- MCP: translate brain/mcp/servers.yml to .cursor/mcp.json and enable ---
 if [ -f "${MCP_CONFIG:-}" ]; then
   {
     echo '{ "mcpServers": {'

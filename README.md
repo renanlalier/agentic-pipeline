@@ -19,7 +19,7 @@ actions/run-agent/
     cursor.sh           cursor-agent
     codex.sh            codex CLI
     lib/skills.sh       skill discovery + keyword-based selection fallback
-agents/<role>/
+brain/prompts/<role>/
   system.md             SACRED · only the platform writes this · XML tags, stack-agnostic
   skills/<name>/SKILL.md tactical, role default · frontmatter name + description
 mcp/
@@ -55,12 +55,12 @@ Resolution: **3 → 2 → 1**. Level 3 wins, but level 1 can always veto.
 
 ## System, skills, and prompt — three separate things
 
-- **`agents/<role>/system.md`** is sacred and stack-agnostic. Written in XML
+- **`brain/prompts/<role>/system.md`** is sacred and stack-agnostic. Written in XML
   tags (`<role>`, `<context>`, `<instructions>`, `<engineering_principles>`,
   `<constraints>`, `<stop_conditions>`, `<output_format>`, `<precedence>`).
   No product repository can override or extend this, and it never mentions
   a framework.
-- **Skills** (`agents/<role>/skills/` on the platform, `.agentic/skills/` in
+- **Skills** (`brain/prompts/<role>/skills/` on the platform, `.agentic/skills/` in
   the product repo) follow the Agent Skills open format: one folder per skill,
   containing a `SKILL.md` with `name` + `description` frontmatter. Two
   categories coexist in the same directory: stack-agnostic skills (commit
@@ -77,7 +77,7 @@ Resolution: **3 → 2 → 1**. Level 3 wins, but level 1 can always veto.
 
 ## MCP
 
-`mcp/servers.yml` describes servers in an abstract way (in this POC, only
+`brain/mcp/servers.yml` describes servers in an abstract way (in this POC, only
 Context7 — works without a key; the key only raises rate limits). Each adapter
 translates this into its CLI's mechanism: Cursor writes `.cursor/mcp.json` and
 runs `cursor-agent mcp enable`; Codex writes `[mcp_servers.*]` in
