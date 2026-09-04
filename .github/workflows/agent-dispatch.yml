@@ -1,4 +1,4 @@
-name: agent-fanout (reusable)
+name: agent-dispatch (reusable)
 
 # Step 3 of the flow, AFTER HITL 1. Runs in the INTAKE repo.
 # Creates one cross-repo sub-issue per approved repository, marks it with

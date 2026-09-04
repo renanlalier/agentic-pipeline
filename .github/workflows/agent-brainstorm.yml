@@ -54,7 +54,7 @@ jobs:
       - name: Checkout platform
         uses: actions/checkout@v5
         with:
-          repository: renanlalier/poc-agentic-platform
+          repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
 

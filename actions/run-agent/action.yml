@@ -76,8 +76,13 @@ runs:
           exit 1
         fi
 
-        echo "cli=$CLI"     >> "$GITHUB_OUTPUT"
-        echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+        # base_url: level 2 from .agentic/config.yml; level 3 override is
+        # ANTHROPIC_BASE_URL set directly in the job env (not captured here).
+        BASE_URL=$(yq -r '.defaults.base_url // ""' .agentic/config.yml 2>/dev/null || echo "")
+
+        echo "cli=$CLI"           >> "$GITHUB_OUTPUT"
+        echo "model=$MODEL"       >> "$GITHUB_OUTPUT"
+        echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
 
         echo "### run-agent" >> "$GITHUB_STEP_SUMMARY"
         echo "| field | value |" >> "$GITHUB_STEP_SUMMARY"
@@ -85,6 +90,7 @@ runs:
         echo "| role | \`$ROLE\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| cli | \`$CLI\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| model | \`$MODEL\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| base-url | \`${BASE_URL:-none}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
@@ -124,6 +130,55 @@ runs:
         echo "- available skills: $N_PLAT from platform, $N_REPO from repo" >> "$GITHUB_STEP_SUMMARY"
         echo "- on-demand loading: each CLI adapter's responsibility" >> "$GITHUB_STEP_SUMMARY"
 
+    - name: Locate memory context
+      id: memory
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        MEMORY_ENABLED=$(yq -r ".memory.enabled // false" .agentic/config.yml 2>/dev/null || echo "false")
+
+        MEMORY_DIR=""
+        AGENTS_MEMORY_FILE=""
+        SEMANTIC_MEMORY_FILE=""
+
+        if [ "$MEMORY_ENABLED" = "true" ]; then
+          MEMORY_DIR=".agentic/memory"
+          mkdir -p "$MEMORY_DIR/episodes"
+
+          # Validate and register AGENTS.md
+          CANDIDATE="$MEMORY_DIR/AGENTS.md"
+          if [ -f "$CANDIDATE" ]; then
+            if grep -qE '<(role|instructions|constraints|stop_conditions)>' "$CANDIDATE"; then
+              echo "::warning file=$CANDIDATE::AGENTS.md contains forbidden XML tags — skipping injection for this run."
+            else
+              AGENTS_MEMORY_FILE="$CANDIDATE"
+            fi
+          fi
+
+          # Validate and register MEMORY.md
+          CANDIDATE="$MEMORY_DIR/MEMORY.md"
+          if [ -f "$CANDIDATE" ]; then
+            if grep -qE '<(role|instructions|constraints|stop_conditions)>' "$CANDIDATE"; then
+              echo "::warning file=$CANDIDATE::MEMORY.md contains forbidden XML tags — skipping injection for this run."
+            else
+              SEMANTIC_MEMORY_FILE="$CANDIDATE"
+            fi
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Memory context:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- agents_memory: \`${AGENTS_MEMORY_FILE:-not found}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- semantic_memory: \`${SEMANTIC_MEMORY_FILE:-not found}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- episodes dir: \`$MEMORY_DIR/episodes/\`" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "Memory disabled for this repo (memory.enabled != true in .agentic/config.yml)"
+        fi
+
+        echo "memory_dir=$MEMORY_DIR"                       >> "$GITHUB_OUTPUT"
+        echo "agents_memory_file=$AGENTS_MEMORY_FILE"       >> "$GITHUB_OUTPUT"
+        echo "semantic_memory_file=$SEMANTIC_MEMORY_FILE"   >> "$GITHUB_OUTPUT"
+
     - name: Emit attribution headers
       shell: bash
       run: |
@@ -148,6 +203,10 @@ runs:
         REPO_SKILLS_DIR: ${{ steps.agent_dir.outputs.repo_skills_dir }}
         MCP_CONFIG: ${{ inputs.platform_path }}/brain/mcp/servers.yml
         CONTEXT7_API_KEY: ${{ env.CONTEXT7_API_KEY }}
+        CLAUDE_BASE_URL: ${{ steps.resolve.outputs.base_url }}
+        MEMORY_DIR: ${{ steps.memory.outputs.memory_dir }}
+        AGENTS_MEMORY_FILE: ${{ steps.memory.outputs.agents_memory_file }}
+        SEMANTIC_MEMORY_FILE: ${{ steps.memory.outputs.semantic_memory_file }}
       run: |
         set -euo pipefail
         PLAT="${{ inputs.platform_path }}"

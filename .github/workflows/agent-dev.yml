@@ -6,7 +6,7 @@ name: agent-dev (reusable)
 # github.repository here is the consumer repo — only the FILE came from the platform.
 #
 # execution_id is OPTIONAL: if not provided as input, it is recovered from the
-# "execution:<id>" label that agent-fanout applied to the sub-issue on creation —
+# "execution:<id>" label that agent-dispatch applied to the sub-issue on creation —
 # same mechanism as agent-plan.yml, because the issues.labeled trigger also has
 # no access to the original dispatch payload.
 
@@ -52,7 +52,7 @@ jobs:
       - name: Checkout platform
         uses: actions/checkout@v5
         with:
-          repository: renanlalier/poc-agentic-platform
+          repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
 
@@ -210,6 +210,35 @@ jobs:
 
           gh api "repos/$REPO/pulls" --input pr_payload.json > pr.json
           echo "PR created: $(jq -r .html_url pr.json)"
+
+      - name: Validate and prune memory files
+        if: always()
+        run: |
+          MEMORY_DIR=".agentic/memory"
+          [ -d "$MEMORY_DIR" ] || exit 0
+
+          # Security check: warn if memory files contain forbidden XML tags.
+          # The run-agent action already blocked injection for this run; this
+          # step flags it in the job summary so the team can investigate.
+          for f in "$MEMORY_DIR/AGENTS.md" "$MEMORY_DIR/MEMORY.md"; do
+            [ -f "$f" ] || continue
+            if grep -qE '<(role|instructions|constraints|stop_conditions)>' "$f"; then
+              echo "::warning file=$f::Memory file contains forbidden XML tags. It was skipped during injection and should be reviewed."
+            fi
+          done
+
+          # Prune oldest episodes when the limit is exceeded.
+          MAX=$(yq -r '.memory.max_episodes // 20' .agentic/config.yml 2>/dev/null || echo 20)
+          EPISODE_DIR="$MEMORY_DIR/episodes"
+          if [ -d "$EPISODE_DIR" ]; then
+            EPISODE_FILES=$(ls "$EPISODE_DIR"/*.md 2>/dev/null || true)
+            COUNT=$(echo "$EPISODE_FILES" | grep -c '\.md$' || true)
+            if (( COUNT > MAX )); then
+              TO_DELETE=$(( COUNT - MAX ))
+              ls -t "$EPISODE_DIR"/*.md | tail -n "$TO_DELETE" | xargs rm -f
+              echo "Pruned $TO_DELETE old episode(s) from $EPISODE_DIR (keeping $MAX)."
+            fi
+          fi
 
       - name: Report on sub-issue (REST)
         env:

@@ -17,7 +17,7 @@ name: agent-plan (reusable)
 # execution_id is OPTIONAL here: on the first turn it comes from the
 # dispatch payload; on subsequent turns (triggered by comment, with no
 # payload) it is recovered from the "execution:<id>" label that
-# agent-fanout applied to the sub-issue when it created it.
+# agent-dispatch applied to the sub-issue when it created it.
 
 on:
   workflow_call:
@@ -57,7 +57,7 @@ jobs:
       - name: Checkout platform
         uses: actions/checkout@v4
         with:
-          repository: renanlalier/poc-agentic-platform
+          repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
 

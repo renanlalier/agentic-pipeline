@@ -7,6 +7,9 @@
 #   PLATFORM_SKILLS_DIR  -> brain/skills/ in the platform repo
 #   REPO_SKILLS_DIR      -> .agentic/skills/ in the consumer repo
 #   MCP_CONFIG           -> brain/mcp/servers.yml (abstract description)
+#   MEMORY_DIR           -> .agentic/memory/ (empty string if memory disabled)
+#   AGENTS_MEMORY_FILE   -> .agentic/memory/AGENTS.md (empty string if not present/invalid)
+#   SEMANTIC_MEMORY_FILE -> .agentic/memory/MEMORY.md (empty string if not present/invalid)
 #
 # This adapter uses the keyword-based skill selection fallback (lib/skills.sh)
 # to DEMONSTRATE the on-demand skill loading mechanism without token cost.
@@ -28,6 +31,18 @@ source "$SCRIPT_DIR/lib/skills.sh"
 
 echo "--- system used (sacred, not editable by the repo) ---" >&2
 head -c 200 "$SYSTEM_FILE" >&2; echo "..." >&2
+
+echo "--- memory context (dry-run: paths only, no injection) ---" >&2
+if [ -n "${AGENTS_MEMORY_FILE:-}" ]; then
+  echo "  agents_memory: $AGENTS_MEMORY_FILE ($(wc -l < "$AGENTS_MEMORY_FILE" | tr -d ' ') lines)" >&2
+else
+  echo "  agents_memory: not available" >&2
+fi
+if [ -n "${SEMANTIC_MEMORY_FILE:-}" ]; then
+  echo "  semantic_memory: $SEMANTIC_MEMORY_FILE ($(wc -l < "$SEMANTIC_MEMORY_FILE" | tr -d ' ') lines)" >&2
+else
+  echo "  semantic_memory: not available" >&2
+fi
 
 echo "--- skill selection by keyword (generic fallback) ---" >&2
 PROMPT_NORM=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')

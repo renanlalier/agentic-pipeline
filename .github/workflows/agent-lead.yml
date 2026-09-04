@@ -46,16 +46,9 @@ jobs:
       - name: Checkout platform
         uses: actions/checkout@v5
         with:
-          repository: renanlalier/poc-agentic-platform
+          repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
-
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
 
       - name: Read the issue
         env:
@@ -69,23 +62,23 @@ jobs:
           echo "--- issue content read ---"
           cat issue.txt
 
-      - name: Fetch real fingerprint of eligible repos and build prompt
+      - name: Discover eligible repos and build prompt
         id: context
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           OWNER: ${{ github.repository_owner }}
+          # Pipeline infrastructure — never implementation targets
+          EXCLUDED: "agentic-pipeline poc-agentic-intake"
         run: |
           set -euo pipefail
-          MAP=.platform/config/capability-map.yml
-
-          N=$(yq -r '.repos | length' "$MAP")
-          echo "eligible repos in capability map: $N"
 
           : > fingerprints.md
-          for i in $(seq 0 $((N-1))); do
-            REPO_NAME=$(yq -r ".repos[$i].name" "$MAP")
-            ROLE=$(yq -r ".repos[$i].role" "$MAP")
-            SUMMARY=$(yq -r ".repos[$i].summary" "$MAP")
+
+          while IFS= read -r REPO_NAME; do
+            if echo "$EXCLUDED" | grep -qw "$REPO_NAME"; then
+              echo "skipping excluded repo: $REPO_NAME"
+              continue
+            fi
 
             LIVE=$(gh api "repos/$OWNER/$REPO_NAME" --jq '{description: .description, language: .language}' 2>/dev/null || echo '{}')
             DESC=$(echo "$LIVE" | jq -r '.description // "no description on GitHub"')
@@ -96,8 +89,6 @@ jobs:
 
             {
               echo "### $REPO_NAME"
-              echo "suggested logical role: $ROLE"
-              echo "domain summary (capability map): $SUMMARY"
               echo "GitHub description: $DESC"
               echo "primary language: $LANG"
               echo "README excerpt:"
@@ -108,7 +99,7 @@ jobs:
             } >> fingerprints.md
 
             echo "fingerprint obtained: $REPO_NAME ($LANG)"
-          done
+          done < <(gh api "users/$OWNER/repos" --paginate --jq '.[].name')
 
           {
             echo "prompt<<PROMPTEOF"
@@ -120,7 +111,7 @@ jobs:
             echo "## Demand"
             cat issue.txt
             echo ""
-            echo "## Eligible repositories (fingerprint fetched live from GitHub)"
+            echo "## Eligible repositories (discovered live from the organization)"
             cat fingerprints.md
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
@@ -192,9 +183,8 @@ jobs:
               echo ""
               echo "---"
               echo "No automatic stop condition failed here — the agent evaluated the"
-              echo "eligible repositories and found no safe match with sufficient judgment."
-              echo "Refine the demand and reopen, or adjust \`config/capability-map.yml\`"
-              echo "if a relevant repository is missing from the eligible list."
+              echo "eligible repositories discovered from the organization and found no"
+              echo "safe match with sufficient judgment. Refine the demand and reopen."
             } > comment.md
             jq -Rs '{body: .}' comment.md > payload.json
             gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
