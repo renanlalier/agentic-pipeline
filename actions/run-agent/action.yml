@@ -8,7 +8,7 @@ description: >
 
 inputs:
   role:
-    description: "Papel logico a executar (po, lead-swe, frontend-swe, ...)"
+    description: "Papel logico a executar (po, tech-lead, frontend-engineer, ...)"
     required: true
   cli_override:
     required: false
@@ -100,8 +100,14 @@ runs:
         echo "platform_skills_dir=$PLATFORM_SKILLS_DIR" >> "$GITHUB_OUTPUT"
         echo "repo_skills_dir=$REPO_SKILLS_DIR" >> "$GITHUB_OUTPUT"
 
-        N_PLAT=$(find "$PLATFORM_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
-        N_REPO=$(find "$REPO_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+        # Nem todo repo consumidor tem .agentic/skills (ex: o repo de
+        # intake nao tem). `find` num diretorio inexistente retorna erro,
+        # e sob pipefail isso mata o script mesmo com o wc/tr seguintes
+        # ok - por isso o guard explicito de existencia antes.
+        N_PLAT=0
+        [ -d "$PLATFORM_SKILLS_DIR" ] && N_PLAT=$(find "$PLATFORM_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+        N_REPO=0
+        [ -d "$REPO_SKILLS_DIR" ] && N_REPO=$(find "$REPO_SKILLS_DIR" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 
         echo "" >> "$GITHUB_STEP_SUMMARY"
         echo "**Contrato localizado:**" >> "$GITHUB_STEP_SUMMARY"
