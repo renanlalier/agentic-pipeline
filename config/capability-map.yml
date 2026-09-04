@@ -1,19 +1,26 @@
 version: 1
 
-# O agente Lead consulta este mapa para PROPOR quais repos a demanda atinge.
-# A proposta vai para aprovacao humana (HITL 1) antes de virar sub-issue.
-# Quando o agente erra o escopo, corrige-se ESTE arquivo - nao o prompt.
+# O agente Tech Lead consulta este mapa para PROPOR quais repos a demanda
+# atinge. A proposta vai para aprovacao humana (HITL 1) antes de virar
+# sub-issue. Quando o agente erra o escopo, corrige-se ESTE arquivo - nao
+# o prompt.
+#
+# O campo `role` referencia um papel GENERALISTA (agents/<role>/system.md).
+# A capacidade de stack de cada repo vem das skills carregadas em runtime,
+# nao do nome do papel - por isso app-poc-1 (React) e app-poc-2 (Kotlin)
+# usam papeis diferentes em stack mas o mesmo papel logico por funcao.
 
 owner: renanlalier
 
 domains:
   - name: interface-usuario
-    description: "telas, componentes, navegacao e estados da UI"
+    description: "telas, componentes, navegacao e estados da UI (React)"
     repos:
       - name: app-poc-1
-        role: frontend-swe
+        role: frontend-engineer
         owner_team: time-frontend
-        typical_changes: [tela, componente, navegacao, validacao de formulario]
+        stack: react
+        typical_changes: [componente, tela, navegacao, validacao de formulario]
     keywords:
       - tela
       - botao
@@ -26,12 +33,13 @@ domains:
       - mensagem de erro
 
   - name: contratos-e-dados
-    description: "API, contratos, regras de negocio e persistencia"
+    description: "API, contratos e regras de negocio (Kotlin/Ktor)"
     repos:
       - name: app-poc-2
-        role: backend-swe
+        role: backend-engineer
         owner_team: time-backend
-        typical_changes: [endpoint, schema, validacao, integracao]
+        stack: kotlin-ktor
+        typical_changes: [rota, endpoint, validacao, contrato de resposta]
     keywords:
       - api
       - endpoint
