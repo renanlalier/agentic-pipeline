@@ -9,6 +9,12 @@ name: agent-dev (reusable)
 # "execution:<id>" label that agent-dispatch applied to the sub-issue on creation —
 # same mechanism as agent-plan.yml, because the issues.labeled trigger also has
 # no access to the original dispatch payload.
+#
+# SECRETS: provider keys are declared as OPTIONAL so that `cli: dry-run` works
+# with no key at all. They are exposed at job level so every step — including
+# the composite run-agent action and the adapter it dispatches to — inherits
+# them. A missing key for a non-dry-run CLI fails in the preflight step below
+# with an actionable message, instead of failing deep inside the adapter.
 
 on:
   workflow_call:
@@ -35,6 +41,19 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "Required when the resolved CLI is claude-code."
+        required: false
+      OPENAI_API_KEY:
+        description: "Required when the resolved CLI is codex."
+        required: false
+      CURSOR_API_KEY:
+        description: "Required when the resolved CLI is cursor."
+        required: false
+      CONTEXT7_API_KEY:
+        description: "Optional. Consumed by MCP servers declared in brain/mcp/servers.yml."
+        required: false
 
 jobs:
   implement:
@@ -43,6 +62,11 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v5
@@ -52,7 +76,7 @@ jobs:
       - name: Checkout platform
         uses: actions/checkout@v5
         with:
-          repository: renanlalier/agentic-pipeline
+          repository: renanlalier/poc-agentic-platform
           ref: v1
           path: .platform
 
@@ -61,6 +85,33 @@ jobs:
           sudo wget -qO /usr/local/bin/yq \
             https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+
+      - name: Preflight — provider key for the resolved CLI
+        run: |
+          set -euo pipefail
+
+          # Mirror the level 3 -> 2 -> 1 resolution that run-agent performs, far
+          # enough to know WHICH key is needed. run-agent remains the authority
+          # on validation against the allowlist; this is only a fast, readable
+          # failure before we branch, commit, and push anything.
+          CLI="${{ inputs.cli_override }}"
+          [ -z "$CLI" ] && CLI=$(yq -r '.defaults.cli // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$CLI" ] && CLI="dry-run"
+
+          case "$CLI" in
+            claude-code) REQUIRED_KEY="ANTHROPIC_API_KEY" ;;
+            codex)       REQUIRED_KEY="OPENAI_API_KEY" ;;
+            cursor)      REQUIRED_KEY="CURSOR_API_KEY" ;;
+            dry-run)     REQUIRED_KEY="" ;;
+            *)           REQUIRED_KEY="" ;;
+          esac
+
+          if [ -n "$REQUIRED_KEY" ] && [ -z "${!REQUIRED_KEY:-}" ]; then
+            echo "::error::cli '$CLI' requires the secret $REQUIRED_KEY, which did not arrive in this run. Add it to this repository (Settings > Secrets and variables > Actions) AND forward it in the caller workflow's secrets: block. Use cli: dry-run to run the mechanics without a key."
+            exit 1
+          fi
+
+          echo "cli '$CLI' — provider key: ${REQUIRED_KEY:-none required}"
 
       - name: Resolve execution_id (input or sub-issue label)
         id: exec
@@ -197,7 +248,7 @@ jobs:
             echo "Closes #$SUB_ISSUE"
             echo ""
             echo "---"
-            echo "**HITL 2** — this PR requires human review. The app that opened it cannot approve it."
+            echo "**Human review required** — the app that opened this PR cannot approve it."
           } > pr_body.md
 
           jq -n \
