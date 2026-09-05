@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>poc-agentic-platform</h1>
+<h1>agentic-pipeline</h1>
 
 <p>A reusable GitHub Actions library that orchestrates AI agents across repositories —<br>
 with human-in-the-loop gates, multi-CLI support, and hard upstream/downstream isolation.</p>
@@ -22,7 +22,7 @@ with human-in-the-loop gates, multi-CLI support, and hard upstream/downstream is
 
 ## What is this?
 
-`poc-agentic-platform` is a **platform library**, not an application. Product repositories call a single `uses:` line and get fully orchestrated AI agents — CLI resolution, model selection, skill discovery, MCP wiring, and human-approval gates included. It defines **how** agents run; it never holds product code or demands.
+`agentic-pipeline` is a **platform library**, not an application. Product repositories call a single `uses:` line and get fully orchestrated AI agents — CLI resolution, model selection, skill discovery, MCP wiring, and human-approval gates included. It defines **how** agents run; it never holds product code or demands.
 
 It provides:
 
@@ -123,7 +123,7 @@ on:
 
 jobs:
   implement:
-    uses: renanlalier/poc-agentic-platform/.github/workflows/agent-dev.yml@v1
+    uses: renanlalier/agentic-pipeline/.github/workflows/agent-dev.yml@v1
     with:
       role: frontend-engineer
       sub_issue: ${{ github.event.client_payload.sub_issue }}
@@ -278,6 +278,7 @@ This is a proof-of-concept. The table below documents what is described in this 
 | Budgets are declarative only | `config/allowlist.yml` defines `budgets`, but nothing enforces them at runtime | A demand can exceed `hard_stop_usd_per_demand` without being stopped |
 | `gateway.enabled` is inert | The allowlist declares a gateway block with required attribution headers; `run-agent` prints the headers but no gateway consumes them | Per-user cost attribution is not enforced end to end |
 | No automated tests | The pipeline has no test suite validating adapter contracts or config resolution | Regressions surface only at runtime, inside a real demand |
+| Mixed `actions/checkout` versions | `agent-plan.yml` still pins `@v4`; the other workflows use `@v5` | Cosmetic today, but a drift point when checkout behaviour changes |
 
 ---
 
