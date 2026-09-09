@@ -25,7 +25,13 @@ fi
 NAME=$(yq '.name' "$AGENT_YML")
 # Folded YAML scalar '>': yq returns the value with a trailing newline; strip it.
 DESC=$(yq '.description' "$AGENT_YML" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-SYSTEM=$(yq '.system' "$AGENT_YML")
+
+# Extract system prompt minus the <output_format> block — that block is for
+# local/CI execution (JSON output consumed by the workflow). In Codex Cloud the
+# agent's response becomes a GitHub comment automatically via the connector, so
+# the output contract is different and defined below.
+SYSTEM=$(yq '.system' "$AGENT_YML" | \
+  sed '/<output_format>/,/<\/output_format>/d')
 
 printf 'name = "%s"\n' "$NAME"
 printf 'description = "%s"\n\n' "$DESC"
@@ -35,20 +41,29 @@ printf 'description = "%s"\n\n' "$DESC"
 printf 'developer_instructions = """\n'
 printf '%s\n' "$SYSTEM"
 
-# Output markers appended after the system prompt. These invisible HTML
-# comments allow the pipeline to detect what Codex decided and apply the
-# correct label transition in codex-response-received.
-cat << 'MARKERS'
+# Cloud-mode output contract: replaces the <output_format> block stripped above.
+# In Codex Cloud your response IS the GitHub comment — do not call gh or git.
+# The pipeline reads the status marker to decide the next label transition.
+cat << 'CLOUD_OUTPUT'
 
-## Output Markers (cloud mode — REQUIRED)
-Append exactly one of the following markers at the very end of your response.
-They are HTML comments and will not be visible to human readers.
+<output_format>
+You are running in Codex Cloud. Your response will be posted automatically as
+a GitHub comment by the Codex connector — do NOT call `gh`, `git`, or any
+shell command to post comments. Just write your reply.
+
+Respond in natural language markdown:
+- If you have a question: write it clearly and conversationally.
+- If the scope is approved: write a brief summary of the agreed scope.
+- If escalating: explain why briefly.
+
+Append exactly ONE of the following invisible HTML markers as the very last
+line of your response. They will not be visible to readers.
 
 - You have a question or need clarification: <!-- codex:status:ask -->
-- Task or scope is complete / approved: <!-- codex:status:approved -->
+- Scope agreed and complete: <!-- codex:status:approved -->
 - Human escalation required: <!-- codex:status:escalated -->
-- Implementation done, PR opened: <!-- codex:status:done -->
-MARKERS
+</output_format>
+CLOUD_OUTPUT
 
 printf '"""\n'
 
