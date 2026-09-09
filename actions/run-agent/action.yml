@@ -282,8 +282,16 @@ runs:
         COMMENT_BODY="@codex [${ROLE} agent]"$'\n\n'"${PROMPT}"$'\n\n'"<!-- codex:dispatch:role=${ROLE}:execution_id=${EXECUTION_ID} -->"
 
         jq -n --arg body "$COMMENT_BODY" '{body: $body}' > /tmp/codex-comment-${{ github.run_id }}.json
-        gh api "repos/$REPO_FULL_NAME/issues/$ISSUE_NUMBER/comments" \
-          --input /tmp/codex-comment-${{ github.run_id }}.json
+        COMMENT_RESP=$(gh api "repos/$REPO_FULL_NAME/issues/$ISSUE_NUMBER/comments" \
+          --input /tmp/codex-comment-${{ github.run_id }}.json)
+
+        # Minimize the dispatch comment so it doesn't pollute the issue history.
+        # Codex Cloud receives the webhook before minimization, so the trigger still fires.
+        NODE_ID=$(printf '%s' "$COMMENT_RESP" | jq -r '.node_id')
+        if [ -n "$NODE_ID" ] && [ "$NODE_ID" != "null" ]; then
+          gh api graphql -f query="mutation { minimizeComment(input: {subjectId: \"$NODE_ID\", classifier: OFF_TOPIC}) { minimizedComment { isMinimized } } }" \
+            >/dev/null 2>&1 || true
+        fi
 
         # Synthetic result: token_usage is zero (execution happens in Codex Cloud).
         SYNTHETIC="{\"role\":\"${ROLE}\",\"execution_id\":\"${EXECUTION_ID}\",\"status\":\"dispatched_to_cloud\",\"token_usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}"
