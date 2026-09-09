@@ -226,6 +226,37 @@ runs:
         echo "x-execution-target: ${{ steps.resolve.outputs.execution_target }}"
         echo "x-repo: ${{ github.repository }}"
 
+    - name: Generate and commit Codex agent TOML
+      id: codex_toml
+      if: ${{ steps.resolve.outputs.execution_target == 'cloud' && steps.resolve.outputs.cli == 'codex' }}
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+        PLAT: ${{ inputs.platform_path }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO_FULL_NAME: ${{ inputs.repo_full_name }}
+      run: |
+        set -euo pipefail
+
+        mkdir -p .codex/agents
+        bash "$PLAT/brain/agents/to-codex-toml.sh" "$ROLE" > ".codex/agents/${ROLE}.toml"
+
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "github-actions[bot]"
+
+        git add ".codex/agents/${ROLE}.toml"
+        if git diff --cached --quiet; then
+          echo "Agent TOML unchanged — skipping commit."
+        else
+          git commit -m "chore: sync .codex/agents/${ROLE}.toml from platform [skip ci]"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO_FULL_NAME}.git"
+          git push origin HEAD
+          echo "Agent TOML committed and pushed."
+        fi
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Codex agent TOML:** \`.codex/agents/${ROLE}.toml\` synced from platform" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Dispatch to Codex Cloud
       id: cloud_dispatch
       if: ${{ steps.resolve.outputs.execution_target == 'cloud' && steps.resolve.outputs.cli == 'codex' }}
