@@ -2,6 +2,7 @@
 # Claude Code CLI adapter (claude).
 #
 # Common contract (env vars): ROLE, MODEL, EXECUTION_ID, PROMPT, SYSTEM_FILE,
+# AGENT_MCPS (comma-separated server names from agent.yml; empty = all allowed),
 # PLATFORM_SKILLS_DIR, REPO_SKILLS_DIR, MCP_CONFIG,
 # MEMORY_DIR, AGENTS_MEMORY_FILE, SEMANTIC_MEMORY_FILE (all optional).
 # CLAUDE_BASE_URL (optional) — forwarded as ANTHROPIC_BASE_URL for LiteLLM
@@ -14,7 +15,8 @@
 # no keyword fallback or content injection needed.
 #
 # MCP: translates brain/mcp/servers.yml into .claude/settings.json (project-
-# level config), read automatically by claude when running in this directory.
+# level config), filtered to only the servers declared in the agent's AGENT_MCPS
+# list. Read automatically by claude when running in this directory.
 set -euo pipefail
 
 : "${ROLE:?}"
@@ -54,11 +56,18 @@ fi
 echo "skills copied to .claude/skills/: $(find .claude/skills -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" >&2
 
 # ── MCP: translate brain/mcp/servers.yml → .claude/settings.json ─────────────
+# Only include servers declared in AGENT_MCPS (from agent.yml). An empty
+# AGENT_MCPS list means the agent declared no MCPs — generate an empty config.
 if [ -f "${MCP_CONFIG:-}" ]; then
+  ALLOWED_MCPS=$(echo "${AGENT_MCPS:-}" | tr ',' '\n' | grep -v '^$' || true)
   {
     echo '{ "mcpServers": {'
     FIRST=1
     yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r name; do
+      if [ -n "$ALLOWED_MCPS" ] && ! echo "$ALLOWED_MCPS" | grep -qxF "$name"; then
+        echo "skipping mcp '$name' (not declared in agent.yml)" >&2
+        continue
+      fi
       URL=$(yq -r ".servers.\"$name\".remote.url" "$MCP_CONFIG")
       HEADER_KEY=$(yq -r ".servers.\"$name\".remote.api_key_header // \"\"" "$MCP_CONFIG")
       ENV_KEY=$(yq -r ".servers.\"$name\".remote.api_key_env // \"\"" "$MCP_CONFIG")
@@ -105,9 +114,25 @@ No markdown, no code fences.
 EOF
 )
 
-# ── Run ───────────────────────────────────────────────────────────────────────
-claude \
+# ── Run (stream-json for token usage) ────────────────────────────────────────
+RAW=$(claude \
   --print \
+  --output-format stream-json \
   --model "$MODEL" \
   --system-prompt "$(cat "$SYSTEM_FILE")" \
-  "$FULL_PROMPT"
+  "$FULL_PROMPT")
+
+# Extract the final result event (last line with "type":"result")
+RESULT_LINE=$(echo "$RAW" | grep '"type":"result"' | tail -1)
+RESPONSE_TEXT=$(echo "$RESULT_LINE" | jq -r '.result // ""')
+INPUT_TOK=$(echo "$RESULT_LINE" | jq -r '.usage.input_tokens // 0')
+OUTPUT_TOK=$(echo "$RESULT_LINE" | jq -r '.usage.output_tokens // 0')
+CACHE_READ=$(echo "$RESULT_LINE" | jq -r '.usage.cache_read_input_tokens // 0')
+CACHE_WRITE=$(echo "$RESULT_LINE" | jq -r '.usage.cache_creation_input_tokens // 0')
+
+# Strip any stray code fences the model may have wrapped around the JSON,
+# then merge token_usage into the response object.
+echo "$RESPONSE_TEXT" | sed '/^```/d' | jq \
+  --argjson i "$INPUT_TOK" --argjson o "$OUTPUT_TOK" \
+  --argjson cr "$CACHE_READ" --argjson cw "$CACHE_WRITE" \
+  '. + { token_usage: { input_tokens: $i, output_tokens: $o, cache_read_input_tokens: $cr, cache_creation_input_tokens: $cw } }'

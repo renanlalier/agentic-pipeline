@@ -3,7 +3,8 @@
 #
 # Common contract for all adapters (env vars):
 #   ROLE, MODEL, EXECUTION_ID, PROMPT
-#   SYSTEM_FILE          -> system.md for the role (sacred, read-only)
+#   SYSTEM_FILE          -> system prompt extracted from agent.yml (sacred, read-only)
+#   AGENT_MCPS           -> comma-separated list of MCP server names from agent.yml
 #   PLATFORM_SKILLS_DIR  -> brain/skills/ in the platform repo
 #   REPO_SKILLS_DIR      -> .agentic/skills/ in the consumer repo
 #   MCP_CONFIG           -> brain/mcp/servers.yml (abstract description)
@@ -29,6 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/skills.sh
 source "$SCRIPT_DIR/lib/skills.sh"
 
+_add_usage() {
+  jq '. + { token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }'
+}
+
 echo "--- system used (sacred, not editable by the repo) ---" >&2
 head -c 200 "$SYSTEM_FILE" >&2; echo "..." >&2
 
@@ -49,9 +54,14 @@ PROMPT_NORM=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')
 SELECTED_SKILLS=$(select_skills_by_keyword "$PROMPT_NORM" "${PLATFORM_SKILLS_DIR:-}" "${REPO_SKILLS_DIR:-}")
 echo "$SELECTED_SKILLS" >&2
 
-echo "--- MCPs that would be installed ---" >&2
+echo "--- MCPs that would be installed (agent-filtered) ---" >&2
 if [ -f "${MCP_CONFIG:-}" ]; then
+  ALLOWED_MCPS=$(echo "${AGENT_MCPS:-}" | tr ',' '\n' | grep -v '^$' || true)
   yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r s; do
+    if [ -n "$ALLOWED_MCPS" ] && ! echo "$ALLOWED_MCPS" | grep -qxF "$s"; then
+      echo "  - $s: [skipped — not declared in agent.yml]" >&2
+      continue
+    fi
     echo "  - $s: $(yq -r ".servers.\"$s\".description" "$MCP_CONFIG" | head -c 80)" >&2
   done
 fi
@@ -75,7 +85,7 @@ $(echo "$DEMANDA" | sed '/^$/d')"
           question: "", scope: $scope,
           summary: "Approval detected in dry-run mode (textual detection, not real judgment)",
           notes: "dry-run adapter: use cli cursor or codex for real brainstorming"
-        }'
+        }' | _add_usage
     else
       N_HUMANO=$(echo "$PROMPT" | grep -c '\[HUMAN\]' || true)
       if [ "$N_HUMANO" -eq 0 ]; then
@@ -91,7 +101,7 @@ $(echo "$DEMANDA" | sed '/^$/d')"
           question: $question, scope: "",
           summary: "Brainstorming turn in dry-run mode",
           notes: "dry-run adapter: canned question, no real judgment without a model"
-        }'
+        }' | _add_usage
     fi
     ;;
 
@@ -120,7 +130,7 @@ $(echo "$DEMANDA" | sed '/^$/d')"
         summary: ("Conservative proposal in dry-run mode (" + ($repos | length | tostring) + " repo(s) from fingerprint, " + $n_skills + " skill(s) loaded by keyword)"),
         repos: $repos, contract_ref: "v1",
         notes: "dry-run adapter has no semantic judgment — run with a real CLI (cursor/codex) for a proposal that actually analyzes each repo fingerprint"
-      }'
+      }' | _add_usage
     ;;
 
   frontend-engineer|backend-engineer)
@@ -133,7 +143,7 @@ $(echo "$DEMANDA" | sed '/^$/d')"
             role: $role, execution_id: $exec_id, status: "approved",
             kind: "", content: "",
             notes: "dry-run adapter: approval detected by text, not real judgment"
-          }'
+          }' | _add_usage
       else
         N_PIPE=$(echo "$PROMPT" | grep -c '\[PIPE\]' || true)
         if [ "$N_PIPE" -eq 0 ]; then
@@ -155,31 +165,27 @@ Approve by commenting 'approved', or ask a question first."
             role: $role, execution_id: $exec_id, status: "ask",
             kind: $kind, content: $content,
             notes: "dry-run adapter: canned content, no real judgment without a model"
-          }'
+          }' | _add_usage
       fi
     else
       # Implementation phase (after plan approved)
-      cat <<JSON
-{
-  "role": "$ROLE",
-  "execution_id": "$EXECUTION_ID",
-  "status": "ok",
-  "summary": "Simulated implementation in dry-run mode ($N_SKILLS skill(s) loaded by keyword)",
-  "changed_files": ["CHANGELOG-agentic.md"],
-  "notes": "dry-run adapter: no model call was made"
-}
-JSON
+      jq -n \
+        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg n_skills "$N_SKILLS" \
+        '{
+          role: $role, execution_id: $exec_id, status: "ok",
+          summary: ("Simulated implementation in dry-run mode (" + $n_skills + " skill(s) loaded by keyword)"),
+          changed_files: ["CHANGELOG-agentic.md"],
+          notes: "dry-run adapter: no model call was made"
+        }' | _add_usage
     fi
     ;;
 
   *)
-    cat <<JSON
-{
-  "role": "$ROLE",
-  "execution_id": "$EXECUTION_ID",
-  "status": "ok",
-  "summary": "Role executed in dry-run mode"
-}
-JSON
+    jq -n \
+      --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
+      '{
+        role: $role, execution_id: $exec_id, status: "ok",
+        summary: "Role executed in dry-run mode"
+      }' | _add_usage
     ;;
 esac

@@ -29,6 +29,14 @@ on:
         required: false
         type: string
         default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
     secrets:
       PIPE_TOKEN:
         required: true
@@ -126,6 +134,10 @@ jobs:
           execution_id: ${{ inputs.execution_id }}
           prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
+          execution_target: ${{ inputs.execution_target }}
+          issue_number: ${{ inputs.issue_number }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || secrets.PIPE_TOKEN }}
 
       - name: Interpret agent decision
         id: decision
@@ -146,14 +158,17 @@ jobs:
           STATUS=$(jq -r '.status' agent_result.json)
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
 
-          if [ "$STATUS" = "escalated" ]; then
+          if [ "$STATUS" = "dispatched_to_cloud" ]; then
+            # Cloud mode: Codex is handling it; skip repo-count validation.
+            true
+          elif [ "$STATUS" = "escalated" ]; then
             echo "::warning::Tech Lead escalated instead of proposing scope. This is the system.md stop_condition acting — not a bug."
-          fi
-
-          N_REPOS=$(jq -r '.repos | length' agent_result.json)
-          if [ "$STATUS" != "escalated" ] && [ "$N_REPOS" -eq 0 ]; then
-            echo "::error::Agent returned status ok but proposed no repositories. Treating as escalation."
-            echo "status=escalated" >> "$GITHUB_OUTPUT"
+          else
+            N_REPOS=$(jq -r '.repos | length' agent_result.json)
+            if [ "$N_REPOS" -eq 0 ]; then
+              echo "::error::Agent returned status ok but proposed no repositories. Treating as escalation."
+              echo "status=escalated" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Publish scope proposal on the issue
@@ -168,6 +183,16 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+
+          if [ "$STATUS" = "dispatched_to_cloud" ]; then
+            gh api "repos/$REPO/issues/$ISSUE/labels" \
+              -f "labels[]=status-awaiting-scope" >/dev/null
+            gh api "repos/$REPO/issues/$ISSUE/labels" \
+              -f "labels[]=status-awaiting-codex-response" >/dev/null
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-new" >/dev/null 2>&1 || true
+            echo "Dispatched to Codex Cloud — waiting for tech-lead bot response on issue #$ISSUE."
+            exit 0
+          fi
 
           if [ "$STATUS" = "escalated" ]; then
             SUMMARY=$(jq -r '.summary' agent_result.json)

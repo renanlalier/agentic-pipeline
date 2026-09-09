@@ -2,6 +2,7 @@
 # Codex CLI adapter.
 #
 # Common contract (env vars): ROLE, MODEL, EXECUTION_ID, PROMPT, SYSTEM_FILE,
+# AGENT_MCPS (comma-separated server names from agent.yml; empty = all allowed),
 # PLATFORM_SKILLS_DIR, REPO_SKILLS_DIR, MCP_CONFIG,
 # MEMORY_DIR, AGENTS_MEMORY_FILE, SEMANTIC_MEMORY_FILE (all optional).
 #
@@ -35,14 +36,20 @@ SELECTED_SKILLS=$(select_skills_by_keyword "$PROMPT_NORM" "${PLATFORM_SKILLS_DIR
 echo "--- skill selection by keyword ---" >&2
 select_skills_by_keyword "$PROMPT_NORM" "${PLATFORM_SKILLS_DIR:-}" "${REPO_SKILLS_DIR:-}" >/dev/null
 
-# --- MCP: register in config.toml as a remote HTTP server ---
+# --- MCP: register in config.toml as a remote HTTP server (agent-filtered) ---
 # Codex reads [mcp_servers.<name>] from ~/.codex/config.toml. The key is via
 # bearer_token_env_var (the env var name, not the value — stays out of the
 # file). Context7 works without a key; the key only raises the rate limit
 # and is added only if CONTEXT7_API_KEY exists in the environment.
+# Only servers declared in AGENT_MCPS (from agent.yml) are registered.
 if [ -f "${MCP_CONFIG:-}" ]; then
+  ALLOWED_MCPS=$(echo "${AGENT_MCPS:-}" | tr ',' '\n' | grep -v '^$' || true)
   mkdir -p "$HOME/.codex"
   yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r name; do
+    if [ -n "$ALLOWED_MCPS" ] && ! echo "$ALLOWED_MCPS" | grep -qxF "$name"; then
+      echo "skipping mcp '$name' (not declared in agent.yml)" >&2
+      continue
+    fi
     if grep -q "^\[mcp_servers\.$name\]" "$HOME/.codex/config.toml" 2>/dev/null; then
       echo "mcp '$name' already configured" >&2
       continue
@@ -94,4 +101,7 @@ No markdown, no code fences.
 EOF
 )
 
-codex exec --model "$MODEL" --skip-git-repo-check "$INPUT"
+# Capture output, strip stray code fences, merge zero token_usage.
+RESULT=$(codex exec --model "$MODEL" --skip-git-repo-check "$INPUT")
+echo "$RESULT" | sed '/^```/d' | jq \
+  '. + { token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }'

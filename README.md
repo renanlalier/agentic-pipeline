@@ -256,6 +256,91 @@ When `memory.enabled: true` in `.agentic/config.yml`, the platform injects two c
 
 ---
 
+## Codex Cloud Mode
+
+In addition to running AI agents locally on the GitHub Actions runner, the pipeline
+supports **cloud delegation** via the [Codex Cloud GitHub App](https://chatgpt.com/codex).
+In this mode the runner posts `@codex [<role> agent] <task>` as an issue comment instead
+of executing a CLI, and the Codex App picks up the work in its own environment.
+
+### How it works
+
+1. `run-agent` resolves `execution_target` (level 3 input → level 2 `.agentic/config.yml`
+   `.defaults.execution_target` → default `local`).
+2. If `execution_target == cloud` and `cli == codex`, the action posts an `@codex` comment
+   and returns a synthetic `dispatched_to_cloud` result. No CLI is installed or executed.
+3. The caller (brainstorm / lead / plan / dev) applies labels:
+   - Its stage label (`status-brainstorming`, `status-planning`, …)
+   - `status-awaiting-codex-response` — signals that the pipeline is waiting for the bot
+4. The Codex bot reacts with 👀, executes the task inside its environment, then posts
+   a response comment ending with a marker:
+   - `<!-- codex:status:ask -->` — needs clarification; human replies; pipeline re-dispatches
+   - `<!-- codex:status:approved -->` — task concluded; pipeline advances state
+   - `<!-- codex:status:done -->` — implementation done; bot has opened a draft PR
+   - `<!-- codex:status:escalated -->` — bot could not proceed; human must intervene
+5. `codex-response-received` job (in each repo's caller workflow) detects the bot comment,
+   reads the marker, and applies the correct label transition.
+6. An audit comment with `<!-- pipe:audit -->` is posted on every bot response to provide
+   a trace link and prevent re-triggering loops.
+
+### State diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> brainstorming : issue opened
+
+    brainstorming --> brainstorming_cloud : [cloud] @codex dispatched
+    brainstorming_cloud --> brainstorming : codex → ask (human replies)
+    brainstorming_cloud --> scope_defined : codex → approved
+    brainstorming --> scope_defined : [local] PO → approved
+
+    scope_defined --> awaiting_scope : tech-lead runs
+    awaiting_scope --> awaiting_scope_cloud : [cloud] @codex dispatched
+    awaiting_scope_cloud --> awaiting_human_approval : codex → ok (scope proposal posted)
+    awaiting_human_approval --> implementing : human applies scope-approved
+
+    awaiting_scope --> implementing : [local] scope-approved after human review
+
+    implementing --> planning : sub-issues created (fan-out)
+    planning --> planning_cloud : [cloud] @codex dispatched
+    planning_cloud --> planning : codex → ask (human replies)
+    planning_cloud --> plan_approved : codex → approved
+    planning --> plan_approved : [local] human approves plan
+
+    plan_approved --> impl_cloud : [cloud] @codex dispatched
+    impl_cloud --> done : codex → done (PR opened)
+    plan_approved --> done : [local] runner opens draft PR
+```
+
+> `status-awaiting-codex-response` is always an **additional** label coexisting with the
+> stage label. The `codex-response-received` job uses the combination to infer the stage.
+> Anti-loop: Codex bot responses never contain `<!-- pipe: -->` markers, so existing guards
+> (`sender.login != 'codex[bot]'` + `<!-- pipe: -->` body check) naturally prevent loops.
+
+### Role contracts in cloud mode
+
+Role contracts (`brain/agents/<role>/agent.yml`) never travel as inline comment text.
+Instead, each Codex Cloud environment runs a **setup script** that:
+
+1. Clones `renanlalier/agentic-pipeline` at `--branch v1`
+2. Calls `brain/agents/to-codex-toml.sh <role>` for each relevant role
+3. Writes the generated `.codex/agents/<role>.toml` into the project
+
+The TOML contains `developer_instructions` (the full XML system prompt), `description`
+(used by Codex for automatic routing), and `[mcp_servers.*]` blocks from
+`brain/mcp/servers.yml`. No TOML files are committed to product repositories.
+
+### Enabling cloud mode
+
+Set the `CODEX_EXECUTION_TARGET` repository variable to `cloud` in GitHub Actions
+settings, or pass `cli_override: codex` + `execution_target: cloud` in a
+`repository_dispatch` payload for per-demand overrides.
+
+All per-repo setup (GitHub App authorization, environment creation, secrets) is covered
+in [docs/runbook-codex-cloud-setup.md](./docs/runbook-codex-cloud-setup.md).
+
+---
+
 ## Versioning
 
 Callers always pin to a tag, never `@main`.

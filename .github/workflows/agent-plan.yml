@@ -44,6 +44,14 @@ on:
         required: false
         type: string
         default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   plan:
@@ -143,6 +151,10 @@ jobs:
           execution_id: ${{ steps.exec.outputs.execution_id }}
           prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
+          execution_target: ${{ inputs.execution_target }}
+          issue_number: ${{ inputs.sub_issue }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
 
       - name: Act on agent decision
         env:
@@ -167,6 +179,14 @@ jobs:
           STATUS=$(jq -r '.status' agent_result.json)
 
           case "$STATUS" in
+            dispatched_to_cloud)
+              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+                -f "labels[]=status-planning" >/dev/null
+              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+                -f "labels[]=status-awaiting-codex-response" >/dev/null
+              echo "Dispatched to Codex Cloud — waiting for planning bot response on sub-issue #$SUB_ISSUE."
+              ;;
+
             ask)
               KIND=$(jq -r '.kind' agent_result.json)
               CONTENT=$(jq -r '.content' agent_result.json)

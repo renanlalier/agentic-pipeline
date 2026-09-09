@@ -38,6 +38,14 @@ on:
         required: false
         type: string
         default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
     secrets:
       PIPE_TOKEN:
         required: true
@@ -110,6 +118,10 @@ jobs:
           execution_id: ${{ inputs.execution_id }}
           prompt: ${{ steps.context.outputs.prompt }}
           platform_path: .platform
+          execution_target: ${{ inputs.execution_target }}
+          issue_number: ${{ inputs.issue_number }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || secrets.PIPE_TOKEN }}
 
       - name: Act on PO decision
         env:
@@ -135,6 +147,14 @@ jobs:
           STATUS=$(jq -r '.status' agent_result.json)
 
           case "$STATUS" in
+            dispatched_to_cloud)
+              gh api "repos/$REPO/issues/$ISSUE/labels" \
+                -f "labels[]=status-brainstorming" >/dev/null
+              gh api "repos/$REPO/issues/$ISSUE/labels" \
+                -f "labels[]=status-awaiting-codex-response" >/dev/null
+              echo "Dispatched to Codex Cloud — waiting for bot response on issue #$ISSUE."
+              ;;
+
             ask)
               QUESTION=$(jq -r '.question' agent_result.json)
               {

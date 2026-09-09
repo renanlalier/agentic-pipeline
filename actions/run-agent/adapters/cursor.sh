@@ -2,6 +2,7 @@
 # Cursor CLI adapter (cursor-agent).
 #
 # Common contract (env vars): ROLE, MODEL, EXECUTION_ID, PROMPT, SYSTEM_FILE,
+# AGENT_MCPS (comma-separated server names from agent.yml; empty = all allowed),
 # PLATFORM_SKILLS_DIR, REPO_SKILLS_DIR, MCP_CONFIG,
 # MEMORY_DIR, AGENTS_MEMORY_FILE, SEMANTIC_MEMORY_FILE (all optional).
 #
@@ -43,12 +44,18 @@ if [ -d "${REPO_SKILLS_DIR:-}" ]; then
 fi
 echo "skills copied to .cursor/skills/: $(find .cursor/skills -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" >&2
 
-# --- MCP: translate brain/mcp/servers.yml to .cursor/mcp.json and enable ---
+# --- MCP: translate brain/mcp/servers.yml → .cursor/mcp.json (agent-filtered) ---
+# Only configure servers declared in AGENT_MCPS (from agent.yml).
 if [ -f "${MCP_CONFIG:-}" ]; then
+  ALLOWED_MCPS=$(echo "${AGENT_MCPS:-}" | tr ',' '\n' | grep -v '^$' || true)
   {
     echo '{ "mcpServers": {'
     FIRST=1
     yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r name; do
+      if [ -n "$ALLOWED_MCPS" ] && ! echo "$ALLOWED_MCPS" | grep -qxF "$name"; then
+        echo "skipping mcp '$name' (not declared in agent.yml)" >&2
+        continue
+      fi
       URL=$(yq -r ".servers.\"$name\".remote.url" "$MCP_CONFIG")
       HEADER_KEY=$(yq -r ".servers.\"$name\".remote.api_key_header // \"\"" "$MCP_CONFIG")
       ENV_KEY=$(yq -r ".servers.\"$name\".remote.api_key_env // \"\"" "$MCP_CONFIG")
@@ -68,6 +75,9 @@ if [ -f "${MCP_CONFIG:-}" ]; then
 
   # headless requires explicit approval per server (cursor-agent mcp enable)
   yq -r '.servers | keys | .[]' "$MCP_CONFIG" | while read -r name; do
+    if [ -n "$ALLOWED_MCPS" ] && ! echo "$ALLOWED_MCPS" | grep -qxF "$name"; then
+      continue
+    fi
     cursor-agent mcp enable "$name" 2>&2 || echo "warning: failed to enable mcp '$name'" >&2
   done
 fi
@@ -103,4 +113,7 @@ No markdown, no code fences.
 EOF
 )
 
-cursor-agent --print --output-format text --model "$MODEL" "$INPUT"
+# Capture output, strip stray code fences, merge zero token_usage.
+RESULT=$(cursor-agent --print --output-format text --model "$MODEL" "$INPUT")
+echo "$RESULT" | sed '/^```/d' | jq \
+  '. + { token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }'

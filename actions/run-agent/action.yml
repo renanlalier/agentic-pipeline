@@ -24,14 +24,32 @@ inputs:
   platform_path:
     required: false
     default: ".platform"
+  execution_target:
+    description: "'local': run the CLI adapter; 'cloud': post @codex comment and return dispatched"
+    required: false
+    default: ""
+  issue_number:
+    description: "Issue/sub-issue number for the @codex comment (required when execution_target=cloud)"
+    required: false
+    default: ""
+  repo_full_name:
+    description: "owner/repo where the @codex comment will be posted (required when execution_target=cloud)"
+    required: false
+    default: ""
+  github_token:
+    description: "Token for posting the @codex comment in cloud mode (PIPE_TOKEN or GITHUB_TOKEN)"
+    required: false
+    default: ""
 
 outputs:
   cli:
     value: ${{ steps.resolve.outputs.cli }}
   model:
     value: ${{ steps.resolve.outputs.model }}
+  execution_target:
+    value: ${{ steps.resolve.outputs.execution_target }}
   result:
-    value: ${{ steps.dispatch.outputs.result }}
+    value: ${{ steps.emit.outputs.result }}
 
 runs:
   using: composite
@@ -64,6 +82,13 @@ runs:
         [ -z "$MODEL" ] && MODEL="$MODEL_L2"
         [ -z "$MODEL" ] && MODEL="dry-run"
 
+        # execution_target: level 3 (input) > level 2 (.agentic/config.yml) > default local
+        EXEC_TARGET="${{ inputs.execution_target }}"
+        if [ -z "$EXEC_TARGET" ]; then
+          EXEC_TARGET=$(yq -r '.defaults.execution_target // ""' .agentic/config.yml 2>/dev/null || echo "")
+        fi
+        [ -z "$EXEC_TARGET" ] && EXEC_TARGET="local"
+
         APPROVED=$(yq -r ".clis.\"$CLI\".approved // false" "$PLAT/config/allowlist.yml")
         if [ "$APPROVED" != "true" ]; then
           echo "::error::CLI '$CLI' is not approved in the allowlist (level 1)"
@@ -80,9 +105,10 @@ runs:
         # ANTHROPIC_BASE_URL set directly in the job env (not captured here).
         BASE_URL=$(yq -r '.defaults.base_url // ""' .agentic/config.yml 2>/dev/null || echo "")
 
-        echo "cli=$CLI"           >> "$GITHUB_OUTPUT"
-        echo "model=$MODEL"       >> "$GITHUB_OUTPUT"
-        echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+        echo "cli=$CLI"                       >> "$GITHUB_OUTPUT"
+        echo "model=$MODEL"                   >> "$GITHUB_OUTPUT"
+        echo "base_url=$BASE_URL"             >> "$GITHUB_OUTPUT"
+        echo "execution_target=$EXEC_TARGET"  >> "$GITHUB_OUTPUT"
 
         echo "### run-agent" >> "$GITHUB_STEP_SUMMARY"
         echo "| field | value |" >> "$GITHUB_STEP_SUMMARY"
@@ -90,6 +116,7 @@ runs:
         echo "| role | \`$ROLE\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| cli | \`$CLI\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| model | \`$MODEL\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| execution target | \`$EXEC_TARGET\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| base-url | \`${BASE_URL:-none}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| execution-id | \`${{ inputs.execution_id }}\` |" >> "$GITHUB_STEP_SUMMARY"
         echo "| repo | \`${{ github.repository }}\` |" >> "$GITHUB_STEP_SUMMARY"
@@ -102,18 +129,26 @@ runs:
         PLAT="${{ inputs.platform_path }}"
         ROLE="${{ inputs.role }}"
 
-        SYSTEM_FILE="$PLAT/brain/prompts/$ROLE/system.md"
-        if [ ! -f "$SYSTEM_FILE" ]; then
-          echo "::error::System prompt not found: $SYSTEM_FILE. Every role requires one."
+        AGENT_FILE="$PLAT/brain/agents/$ROLE/agent.yml"
+        if [ ! -f "$AGENT_FILE" ]; then
+          echo "::error::Agent definition not found: $AGENT_FILE. Every role requires one."
           exit 1
         fi
+
+        # Extract system prompt to a temp file so adapters receive SYSTEM_FILE unchanged.
+        SYSTEM_FILE="/tmp/agent-system-${ROLE}-${{ github.run_id }}.md"
+        yq -r '.system' "$AGENT_FILE" > "$SYSTEM_FILE"
+
+        # Comma-separated list of MCP server names declared by this agent.
+        AGENT_MCPS=$(yq -r '.mcps // [] | join(",")' "$AGENT_FILE")
 
         PLATFORM_SKILLS_DIR="$PLAT/brain/skills"
         REPO_SKILLS_DIR=".agentic/skills"
 
-        echo "system_file=$SYSTEM_FILE" >> "$GITHUB_OUTPUT"
+        echo "system_file=$SYSTEM_FILE"             >> "$GITHUB_OUTPUT"
+        echo "agent_mcps=$AGENT_MCPS"               >> "$GITHUB_OUTPUT"
         echo "platform_skills_dir=$PLATFORM_SKILLS_DIR" >> "$GITHUB_OUTPUT"
-        echo "repo_skills_dir=$REPO_SKILLS_DIR" >> "$GITHUB_OUTPUT"
+        echo "repo_skills_dir=$REPO_SKILLS_DIR"     >> "$GITHUB_OUTPUT"
 
         # Not every consumer repo has .agentic/skills (e.g. the intake repo
         # does not). `find` on a non-existent directory returns an error, and
@@ -126,7 +161,8 @@ runs:
 
         echo "" >> "$GITHUB_STEP_SUMMARY"
         echo "**Contract located:**" >> "$GITHUB_STEP_SUMMARY"
-        echo "- system: \`$SYSTEM_FILE\` (sacred, platform-only)" >> "$GITHUB_STEP_SUMMARY"
+        echo "- agent: \`$AGENT_FILE\`" >> "$GITHUB_STEP_SUMMARY"
+        echo "- mcps: \`${AGENT_MCPS:-none}\`" >> "$GITHUB_STEP_SUMMARY"
         echo "- available skills: $N_PLAT from platform, $N_REPO from repo" >> "$GITHUB_STEP_SUMMARY"
         echo "- on-demand loading: each CLI adapter's responsibility" >> "$GITHUB_STEP_SUMMARY"
 
@@ -187,10 +223,53 @@ runs:
         echo "x-role: ${{ inputs.role }}"
         echo "x-cli: ${{ steps.resolve.outputs.cli }}"
         echo "x-model: ${{ steps.resolve.outputs.model }}"
+        echo "x-execution-target: ${{ steps.resolve.outputs.execution_target }}"
         echo "x-repo: ${{ github.repository }}"
 
+    - name: Dispatch to Codex Cloud
+      id: cloud_dispatch
+      if: ${{ steps.resolve.outputs.execution_target == 'cloud' && steps.resolve.outputs.cli == 'codex' }}
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+        EXECUTION_ID: ${{ inputs.execution_id }}
+        PROMPT: ${{ inputs.prompt }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        REPO_FULL_NAME: ${{ inputs.repo_full_name }}
+        GH_TOKEN_INPUT: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+
+        # Use the explicitly provided token; fall back to the runner's GITHUB_TOKEN.
+        GH_TOKEN="${GH_TOKEN_INPUT:-${GITHUB_TOKEN:-}}"
+        export GH_TOKEN
+
+        # Build the comment body safely via jq so the PROMPT content (which may
+        # contain quotes, backslashes, or special characters) never breaks the JSON.
+        # The role contract lives in .codex/agents/<role>.toml generated by the
+        # environment setup script — this comment body carries only the task.
+        COMMENT_BODY="@codex [${ROLE} agent]
+
+${PROMPT}
+
+<!-- codex:dispatch:role=${ROLE}:execution_id=${EXECUTION_ID} -->"
+
+        jq -n --arg body "$COMMENT_BODY" '{body: $body}' > /tmp/codex-comment-${{ github.run_id }}.json
+        gh api "repos/$REPO_FULL_NAME/issues/$ISSUE_NUMBER/comments" \
+          --input /tmp/codex-comment-${{ github.run_id }}.json
+
+        # Synthetic result: token_usage is zero (execution happens in Codex Cloud).
+        SYNTHETIC="{\"role\":\"${ROLE}\",\"execution_id\":\"${EXECUTION_ID}\",\"status\":\"dispatched_to_cloud\",\"token_usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}"
+        printf '%s\n' "$SYNTHETIC" > /tmp/agent-result-${{ github.run_id }}.json
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Dispatched to Codex Cloud** — awaiting bot response" >> "$GITHUB_STEP_SUMMARY"
+        echo "- issue: #\`$ISSUE_NUMBER\` in \`$REPO_FULL_NAME\`" >> "$GITHUB_STEP_SUMMARY"
+        echo "- label \`status-awaiting-codex-response\` will be applied by the caller" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Dispatch to adapter
-      id: dispatch
+      id: local_dispatch
+      if: ${{ steps.resolve.outputs.execution_target != 'cloud' || steps.resolve.outputs.cli != 'codex' }}
       shell: bash
       env:
         ROLE: ${{ inputs.role }}
@@ -199,6 +278,7 @@ runs:
         EXECUTION_ID: ${{ inputs.execution_id }}
         PROMPT: ${{ inputs.prompt }}
         SYSTEM_FILE: ${{ steps.agent_dir.outputs.system_file }}
+        AGENT_MCPS: ${{ steps.agent_dir.outputs.agent_mcps }}
         PLATFORM_SKILLS_DIR: ${{ steps.agent_dir.outputs.platform_skills_dir }}
         REPO_SKILLS_DIR: ${{ steps.agent_dir.outputs.repo_skills_dir }}
         MCP_CONFIG: ${{ inputs.platform_path }}/brain/mcp/servers.yml
@@ -215,8 +295,37 @@ runs:
         chmod +x "$PLAT/$ADAPTER"
         RESULT=$("$PLAT/$ADAPTER")
 
+        printf '%s\n' "$RESULT" > /tmp/agent-result-${{ github.run_id }}.json
+
+        # Emit token usage to the step summary (always present in adapter output).
+        TOKEN_USAGE=$(printf '%s\n' "$RESULT" | jq -c '.token_usage // {}' 2>/dev/null || echo '{}')
+        INPUT_TOK=$(printf '%s\n' "$TOKEN_USAGE" | jq -r '.input_tokens // 0')
+        OUTPUT_TOK=$(printf '%s\n' "$TOKEN_USAGE" | jq -r '.output_tokens // 0')
+        CACHE_READ=$(printf '%s\n' "$TOKEN_USAGE" | jq -r '.cache_read_input_tokens // 0')
+        CACHE_WRITE=$(printf '%s\n' "$TOKEN_USAGE" | jq -r '.cache_creation_input_tokens // 0')
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Token usage:**" >> "$GITHUB_STEP_SUMMARY"
+        echo "| metric | tokens |" >> "$GITHUB_STEP_SUMMARY"
+        echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+        echo "| input | \`$INPUT_TOK\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| output | \`$OUTPUT_TOK\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| cache read | \`$CACHE_READ\` |" >> "$GITHUB_STEP_SUMMARY"
+        echo "| cache write | \`$CACHE_WRITE\` |" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Emit result
+      id: emit
+      shell: bash
+      run: |
+        set -euo pipefail
+        RESULT_FILE="/tmp/agent-result-${{ github.run_id }}.json"
+        if [ ! -f "$RESULT_FILE" ]; then
+          echo "::error::No result file produced by dispatch step — check previous steps for errors."
+          exit 1
+        fi
+        RESULT=$(cat "$RESULT_FILE")
         {
           echo "result<<AGENTEOF"
-          echo "$RESULT"
+          printf '%s\n' "$RESULT"
           echo "AGENTEOF"
         } >> "$GITHUB_OUTPUT"

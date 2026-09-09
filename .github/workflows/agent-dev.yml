@@ -41,6 +41,14 @@ on:
         required: false
         type: string
         default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
     secrets:
       ANTHROPIC_API_KEY:
         description: "Required when the resolved CLI is claude-code."
@@ -154,6 +162,18 @@ jobs:
             yq -r '.constraints.forbid_paths[]?' .agentic/config.yml || true
           fi
 
+      - name: Resolve execution target
+        id: mode
+        run: |
+          set -euo pipefail
+          EXEC_TARGET="${{ inputs.execution_target }}"
+          if [ -z "$EXEC_TARGET" ]; then
+            EXEC_TARGET=$(yq -r '.defaults.execution_target // ""' .agentic/config.yml 2>/dev/null || echo "")
+          fi
+          [ -z "$EXEC_TARGET" ] && EXEC_TARGET="local"
+          echo "target=$EXEC_TARGET" >> "$GITHUB_OUTPUT"
+          echo "Execution target resolved to: $EXEC_TARGET"
+
       - name: Read the approved plan
         id: plano
         env:
@@ -177,6 +197,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create working branch
+        if: steps.mode.outputs.target != 'cloud'
         env:
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
         run: |
@@ -194,8 +215,24 @@ jobs:
           execution_id: ${{ steps.exec.outputs.execution_id }}
           prompt: "Implement sub-issue #${{ inputs.sub_issue }} of this repository, respecting contract ${{ inputs.contract_ref }} and the approved plan below. Do not reopen decomposition decisions already closed in the plan — implement what it describes.\n\n${{ steps.plano.outputs.plano }}"
           platform_path: .platform
+          execution_target: ${{ steps.mode.outputs.target }}
+          issue_number: ${{ inputs.sub_issue }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
+
+      - name: Apply cloud dispatch labels
+        if: steps.mode.outputs.target == 'cloud'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+        run: |
+          gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+            -f "labels[]=status-awaiting-codex-response" >/dev/null
+          echo "Dispatched to Codex Cloud — waiting for implementation bot response on sub-issue #$SUB_ISSUE."
 
       - name: Materialize the change
+        if: steps.mode.outputs.target != 'cloud'
         env:
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           ROLE: ${{ inputs.role }}
@@ -223,6 +260,7 @@ jobs:
           git push origin "agentic/$EXEC_ID"
 
       - name: Open draft pull request (REST)
+        if: steps.mode.outputs.target != 'cloud'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
