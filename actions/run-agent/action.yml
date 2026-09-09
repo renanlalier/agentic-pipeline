@@ -250,6 +250,7 @@ runs:
         else
           git commit -m "chore: sync .codex/agents/${ROLE}.toml from platform [skip ci]"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO_FULL_NAME}.git"
+          git pull --rebase origin HEAD
           git push origin HEAD
           echo "Agent TOML committed and pushed."
         fi
