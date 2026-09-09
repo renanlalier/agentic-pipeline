@@ -32,11 +32,11 @@ clis:
     adapter: actions/run-agent/adapters/claude-code.sh
 
 models:
-  po:                  [dry-run, claude-sonnet-4-6, gpt-5-mini]
-  tech-lead:            [dry-run, claude-opus-5, claude-sonnet-4-6]
-  frontend-engineer:    [dry-run, claude-sonnet-4-6, gpt-5]
-  backend-engineer:     [dry-run, claude-sonnet-4-6, gpt-5]
-  qa:                   [dry-run, claude-sonnet-4-6]
+  po:                  [dry-run, codex-1, claude-sonnet-4-6, gpt-5-mini]
+  tech-lead:            [dry-run, codex-1, claude-opus-5, claude-sonnet-4-6]
+  frontend-engineer:    [dry-run, codex-1, claude-sonnet-4-6, gpt-5]
+  backend-engineer:     [dry-run, codex-1, claude-sonnet-4-6, gpt-5]
+  qa:                   [dry-run, codex-1, claude-sonnet-4-6]
 
 budgets:
   default_usd_per_demand: 5
