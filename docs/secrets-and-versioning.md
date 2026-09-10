@@ -4,18 +4,48 @@
 
 ## Secrets Reference
 
+### GitHub App (always required)
+
+| Secret | Where to set | Purpose |
+|---|---|---|
+| `APP_ID` | `poc-agentic-intake` (or org) | Identifies the GitHub App for token generation |
+| `APP_PRIVATE_KEY` | `poc-agentic-intake` (or org) | Authenticates the GitHub App for token generation |
+
+Cross-repo operations (creating sub-issues, sending `repository_dispatch`, posting comments) use a **short-lived GitHub App token** generated at job runtime via `actions/create-github-app-token@v1`. The App acts under its own bot identity — no human PAT is involved.
+
+### CLI API Keys — two modes
+
+#### Mode A: GitHub Secrets (default)
+
 | Secret | Where to set | Required when |
 |---|---|---|
-| `APP_ID` | `poc-agentic-intake` (or org) | Always — identifies the GitHub App for token generation |
-| `APP_PRIVATE_KEY` | `poc-agentic-intake` (or org) | Always — authenticates the GitHub App for token generation |
 | `ANTHROPIC_API_KEY` | each product repo | `cli: claude-code` |
 | `OPENAI_API_KEY` | each product repo | `cli: codex` (local mode) |
 | `CURSOR_API_KEY` | each product repo | `cli: cursor` |
 | `CONTEXT7_API_KEY` | each product repo | Optional — raises MCP rate limit only |
 
-With `cli: dry-run` or `execution_target: cloud`, no model API key is needed on the runner.
+#### Mode B: Vault (recommended — per-user isolation)
 
-Cross-repo operations (creating sub-issues in product repos, sending `repository_dispatch`, posting comments) use a **short-lived GitHub App token** generated at job runtime via `actions/create-github-app-token@v1`. The App acts under its own bot identity — no human PAT is involved.
+Set `secrets.source: vault` in the repo's `.agentic/config.yml`. No API key secrets are stored in GitHub. Instead:
+
+1. Each user registers their own key once via the `agentic-credentials` repo workflow.
+2. Keys are stored in Azure Key Vault as `{SECRET_NAME}--{github-username}` (e.g. `ANTHROPIC-API-KEY--alice`).
+3. At runtime, `run-agent` fetches the key of the issue author and injects it as a masked env var.
+
+The following **repository variables** (not secrets) must be set on the intake repo and all product repos (or org-level):
+
+| Variable | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | App Registration client ID |
+| `AZURE_TENANT_ID` | Azure tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| `AZURE_VAULT_URL` | `https://my-vault.vault.azure.net` |
+
+OIDC authentication requires `permissions: id-token: write` on the job — already set in all reusable workflows that support vault.
+
+See [`agentic-credentials`](https://github.com/renanlalier/agentic-credentials) for full setup instructions and OIDC diagrams.
+
+With `cli: dry-run` or `execution_target: cloud`, no model API key is needed on the runner regardless of mode.
 
 ---
 

@@ -147,12 +147,61 @@ flowchart TD
 
 ---
 
+## Credential & Vault Architecture
+
+When `secrets.source: vault` is set in a repo's `.agentic/config.yml`, the pipeline fetches CLI API keys from Azure Key Vault at runtime using OIDC — no long-lived secrets stored anywhere.
+
+```mermaid
+flowchart TB
+    subgraph GITHUB["GitHub"]
+        direction TB
+        OIDC["GitHub OIDC Provider\ntoken.actions.githubusercontent.com"]
+        subgraph CREDS["agentic-credentials repo"]
+            REG["Register CLI Secret\n(workflow_dispatch)"]
+        end
+        subgraph INTAKE["poc-agentic-intake repo"]
+            PIPE["agent-brainstorm / agent-lead\nrequester = issue author"]
+        end
+    end
+
+    subgraph AZURE["Azure"]
+        AAD["Microsoft Entra ID\n(App Registration + Federated Credential)"]
+        KV["Azure Key Vault\nANTHROPIC-API-KEY--alice\nANTHROPIC-API-KEY--bob\nOPENAI-API-KEY--alice"]
+    end
+
+    REG -->|"1. Request OIDC JWT"| OIDC
+    PIPE -->|"1. Request OIDC JWT"| OIDC
+    OIDC -->|"2. Signed JWT (subject: repo:owner/repo:...)"| REG
+    OIDC -->|"2. Signed JWT"| PIPE
+    REG -->|"3. Exchange JWT"| AAD
+    PIPE -->|"3. Exchange JWT"| AAD
+    AAD -->|"4. Azure access token"| REG
+    AAD -->|"4. Azure access token"| PIPE
+    REG -->|"5. vault_put SECRET--alice"| KV
+    PIPE -->|"5. vault_get SECRET--alice\n(masked → env var)"| KV
+
+    style GITHUB fill:#f0f4ff,stroke:#4a6fa5,stroke-width:2px
+    style AZURE fill:#fff4e0,stroke:#d98324,stroke-width:2px
+    style CREDS fill:#f3effa,stroke:#6e40c9,stroke-width:1px
+    style INTAKE fill:#eaf5f0,stroke:#3da639,stroke-width:1px
+    style OIDC fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
+    style AAD fill:#fff9f0,stroke:#d98324,color:#5c3a0a
+    style KV fill:#eaf5f0,stroke:#3da639,color:#0d2b10
+```
+
+Authentication uses **OpenID Connect (OIDC) federated credentials** — no client secrets or certificates. Each repo that calls `azure/login@v2` must have a federated credential on the App Registration with a subject matching its exact `repo:owner/repo:ref:...` claim.
+
+Per-user isolation: secrets are namespaced by GitHub username (`ANTHROPIC-API-KEY--alice`). The pipeline always uses the key of whoever opened the demand issue — never a shared credential — ensuring separate licenses, quotas, and billing per user.
+
+---
+
 ## Design Principles
 
 - **Hard isolation** — product repos run in separate VMs. No shared context, no shared file system.
 - **Upstream/downstream separation** — `poc-agentic-intake` never touches product code. Product repos never read the demand body directly; they receive only the correlation token (`exec-N`) via `repository_dispatch`.
 - **Platform as library** — `agentic-pipeline` is called, never triggered. Product repos opt in via a single `uses:` line.
 - **Security-first prompt injection prevention** — issue body text is never interpolated with `${{ }}` inside a `run:` block. It always travels through a file or environment variable.
+- **No long-lived secrets for vault** — Azure authentication uses OIDC. The runner requests a short-lived JWT from GitHub's OIDC provider and exchanges it for an Azure access token. No client secret or certificate is stored anywhere.
 
 ---
 
