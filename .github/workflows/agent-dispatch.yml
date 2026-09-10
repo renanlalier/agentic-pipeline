@@ -28,8 +28,12 @@ on:
         type: string
         default: ""
     secrets:
-      PIPE_TOKEN:
+      APP_ID:
         required: true
+        description: "GitHub App ID for generating a scoped installation token"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (PEM) for generating a scoped installation token"
 
 jobs:
   fanout:
@@ -40,9 +44,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Recover the approved scope
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
         run: |
@@ -68,7 +80,7 @@ jobs:
 
       - name: Create cross-repo sub-issues and dispatch planning
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           PARENT_REPO_FULL: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
@@ -147,7 +159,7 @@ jobs:
 
       - name: Update parent issue state
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
         run: |

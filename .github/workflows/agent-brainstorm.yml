@@ -12,14 +12,11 @@ name: agent-brainstorm (reusable)
 # status "escalated" -> posts the reason and stops (round count exceeded
 #                       or human asked to cancel)
 #
-# IMPORTANT: because authentication uses a personal PAT (not a GitHub App
-# bot), every comment posted by the pipeline appears under the SAME user
-# who opened the issue — there is no way to distinguish by login. For this
-# reason every comment this workflow posts carries the invisible HTML marker
-# <!-- pipe:brainstorm --> at the end, and the caller (on-issue.yml) uses
-# that marker to NOT re-trigger brainstorm when the pipeline's own comment
-# arrives via issue_comment.created. Without this, the pipeline would loop
-# replying to itself.
+# IMPORTANT: every comment posted by the pipeline carries the invisible HTML
+# marker <!-- pipe:brainstorm --> at the end. The caller (on-brainstorm.yml)
+# uses that marker to NOT re-trigger brainstorm when the pipeline's own
+# comment arrives via issue_comment.created. Without this the pipeline would
+# loop replying to itself.
 
 on:
   workflow_call:
@@ -47,8 +44,12 @@ on:
         type: string
         default: ""
     secrets:
-      PIPE_TOKEN:
+      APP_ID:
         required: true
+        description: "GitHub App ID for generating a scoped installation token"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (PEM) for generating a scoped installation token"
 
 jobs:
   brainstorm:
@@ -58,6 +59,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
 
       - name: Checkout platform
         uses: actions/checkout@v5
@@ -69,7 +78,7 @@ jobs:
       - name: Build conversation (issue + last 5 comments)
         id: context
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
         run: |
@@ -124,11 +133,11 @@ jobs:
           execution_target: ${{ inputs.execution_target }}
           issue_number: ${{ inputs.issue_number }}
           repo_full_name: ${{ github.repository }}
-          github_token: ${{ inputs.github_token != '' && inputs.github_token || secrets.PIPE_TOKEN }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
 
       - name: Act on PO decision
         env:
-          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue_number }}
           EXEC_ID: ${{ inputs.execution_id }}

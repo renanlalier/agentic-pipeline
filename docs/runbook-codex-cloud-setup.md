@@ -128,6 +128,29 @@ bash /tmp/platform/brain/agents/to-codex-toml.sh backend-engineer \
 
 These are separate from the Codex Cloud environment secrets above.
 
+### GitHub App (cross-repo operations)
+
+The pipeline uses a **GitHub App** to perform cross-repo operations (creating sub-issues, sending `repository_dispatch`, posting comments). A short-lived installation token is generated at job runtime — no long-lived PAT.
+
+**Setup steps:**
+1. Go to your GitHub profile (or org) → **Settings → Developer settings → GitHub Apps → New GitHub App**
+2. Set the following **permissions:**
+   - Repository: `Issues: Read and Write`, `Contents: Read`, `Actions: Read and Write` (for `repository_dispatch`)
+   - No user or org permissions needed
+3. After creation, note the **App ID** from the General settings page
+4. Go to **Private keys → Generate a private key** and save the `.pem` file
+5. Install the App on all relevant repositories (or all repos in your org)
+6. Set the following secrets on `poc-agentic-intake` (or as org secrets — see below):
+
+| Secret | Value |
+|---|---|
+| `APP_ID` | The numeric App ID from the App's General settings page |
+| `APP_PRIVATE_KEY` | The full contents of the generated `.pem` private key file |
+
+> **Org-level:** Set these as org secrets with **All repositories** access. New repos added to the org will inherit them automatically with no per-repo configuration.
+
+### Other secrets and variables
+
 | Repository | Secret/Variable | Value | Purpose |
 |---|---|---|---|
 | All product repos | Secret: `OPENAI_API_KEY` | OpenAI key | Local `codex exec` adapter (independent of GitHub App) |
