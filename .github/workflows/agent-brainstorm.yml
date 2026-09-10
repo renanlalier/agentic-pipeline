@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: ""
+      secrets_source:
+        description: "Override secrets.source from .agentic/config.yml. 'github-secrets' | 'vault'"
+        required: false
+        type: string
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -50,6 +55,14 @@ on:
       APP_PRIVATE_KEY:
         required: true
         description: "GitHub App private key (PEM) for generating a scoped installation token"
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      CURSOR_API_KEY:
+        required: false
+      CONTEXT7_API_KEY:
+        required: false
 
 jobs:
   brainstorm:
@@ -57,6 +70,13 @@ jobs:
     permissions:
       issues: write
       contents: write
+      id-token: write
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+      AZURE_VAULT_URL: ${{ vars.AZURE_VAULT_URL }}
     steps:
       - uses: actions/checkout@v5
 
@@ -74,6 +94,30 @@ jobs:
           repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Resolve secrets_source (level 3 → 2)
+        id: secrets_src
+        run: |
+          set -euo pipefail
+          SRC="${{ inputs.secrets_source }}"
+          [ -z "$SRC" ] && SRC=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$SRC" ] && SRC="github-secrets"
+          echo "secrets_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Secrets source resolved to: $SRC"
+
+      - name: Azure login (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build conversation (issue + last 5 comments)
         id: context
@@ -134,6 +178,7 @@ jobs:
           issue_number: ${{ inputs.issue_number }}
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
+          secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
 
       - name: Act on PO decision
         env:
