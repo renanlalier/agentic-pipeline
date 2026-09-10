@@ -15,8 +15,8 @@ _vault_azure_vault_name() {
     echo "::error::AZURE_VAULT_URL is not set. Configure it as a GitHub Actions variable (Settings > Secrets and variables > Variables)." >&2
     return 1
   fi
-  # Extract vault name from URL: https://my-vault.vault.azure.net → my-vault
-  local url="$AZURE_VAULT_URL"
+  # Extract vault name from URL: https://my-vault.vault.azure.net[/] → my-vault
+  local url="${AZURE_VAULT_URL%/}"  # strip optional trailing slash
   local name="${url#https://}"
   echo "${name%.vault.azure.net}"
 }
