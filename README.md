@@ -105,16 +105,16 @@ flowchart TD
     end
 
     H{{"status?"}}:::decision
-    HASK["Post question\nas issue comment\nadd status-brainstorming"]:::state
-    HAPP["Fill ## Scope section\nadd status-scope-defined\nremove status-brainstorming"]:::state
+    HASK["Post question\nas issue comment\nadd brainstorming"]:::state
+    HAPP["Fill ### Scope section\nadd scope-defined\nremove brainstorming"]:::state
 
     subgraph PH2["Phase 2 · Scope Proposal — poc-agentic-intake"]
-        I["<b>on-issue.yml</b> fires\n<i>trigger: issues.labeled = status-scope-defined</i>"]:::workflow
+        I["<b>on-issue.yml</b> fires\n<i>trigger: issues.labeled = scope-defined</i>"]:::workflow
         J["calls agent-lead.yml@v1\n<i>role: tech-lead · model: codex-1</i>"]:::reusable
         K["Tech Lead reads org repos\nvia GitHub API fingerprint\nproposes repo ↔ role table"]:::agent
     end
 
-    HITL1{{"👤 HITL 1\nHuman applies label\nscope-approved"}}:::gate
+    HITL1{{"👤 HITL 1\nHuman comments approval\nscope-continue re-invokes Tech Lead\nagent applies scope-approved"}}:::gate
 
     subgraph PH3["Phase 3 · Fanout — poc-agentic-intake"]
         L["<b>on-issue.yml</b> fires\n<i>trigger: issues.labeled = scope-approved</i>"]:::workflow
@@ -173,19 +173,20 @@ flowchart TD
 | **Trigger** | `issues.opened` in `poc-agentic-intake` |
 | **Workflow** | `poc-agentic-intake/.github/workflows/on-issue.yml` → calls `agentic-pipeline/agent-brainstorm.yml@v1` |
 | **Agent** | `po` (Product Owner) |
-| **Loop** | Each human comment re-triggers `brainstorm-continue` job (while `status-brainstorming` label is present and sender is not the Codex bot) |
-| **Anti-loop guard** | Pipeline comments carry `<!-- pipe:brainstorm -->`. Codex bot comments are excluded by `sender.login` check (`chatgpt-codex-connector[bot]`). Comments marked `status-awaiting-codex-response` are skipped. |
-| **Outputs** | `status: ask` → posts question, keeps `status-brainstorming`<br>`status: approved` → fills `## Scope` in issue body, applies `status-scope-defined`<br>`status: escalated` → posts reason, stops |
+| **Loop** | Each human comment re-triggers `brainstorm-continue` job (while `brainstorming` label is present and sender is not the Codex bot) |
+| **Anti-loop guard** | Pipeline comments carry `<!-- pipe:brainstorm -->`. Codex bot comments are excluded by `sender.login` check (`chatgpt-codex-connector[bot]`). Comments marked `awaiting-agent-response` are skipped. |
+| **Outputs** | `status: ask` → posts question, keeps `brainstorming`<br>`status: approved` → fills `### Scope` in issue body, applies `scope-defined`<br>`status: escalated` → posts reason, stops |
 
 ### Phase 2 — Scope Proposal
 
 | Field | Detail |
 |---|---|
-| **Trigger** | `issues.labeled = status-scope-defined` in `poc-agentic-intake` |
+| **Trigger** | `issues.labeled = scope-defined` in `poc-agentic-intake` |
 | **Workflow** | `on-issue.yml` (job: `propose-scope`) → calls `agentic-pipeline/agent-lead.yml@v1` |
 | **Agent** | `tech-lead` |
-| **What it does** | Reads all org repos via GitHub API, checks each repo's description and README, applies `evaluate-eligible-repositories` skill, produces a markdown table: `repo \| role \| why \| type` |
-| **Gate** | Human reads the proposal and applies `scope-approved` label manually |
+| **What it does** | Reads all org repos via GitHub API, checks each repo's description and README, applies `evaluate-eligible-repositories` skill, produces a markdown table: `repo \| role \| why \| type`. Posts proposal with `<!-- pipe:lead -->` marker. |
+| **Loop (HITL 1)** | Human comments on the proposal. `scope-continue` job re-invokes `agent-lead.yml@v1` while `awaiting-scope-approval` label is present. Agent can revise (`status: revised`) or self-approve (`status: approved` → applies `scope-approved` label automatically). |
+| **Gate** | No manual label required. The Tech Lead applies `scope-approved` when the human approves via comment. |
 
 ### Phase 3 — Fanout
 
@@ -195,7 +196,7 @@ flowchart TD
 | **Workflow** | `on-issue.yml` (job: `fanout`) → calls `agentic-pipeline/agent-dispatch.yml@v1` |
 | **What it does** | Parses the Tech Lead's approved table. For each repo: creates a cross-repo sub-issue (via REST `/sub_issues`), stamps `execution:exec-N` and `type/<type>` labels, sends `repository_dispatch(agent-plan)` |
 | **Correlation token** | `execution_id = exec-<issue-number>` — stamped on every sub-issue as a label. This is the only link between upstream and downstream. No prompt content crosses the boundary. |
-| **Result** | Parent issue gets `status-implementing`. Product repos' workflows fire independently in isolated VMs. |
+| **Result** | Parent issue gets `implementing`. Product repos' workflows fire independently in isolated VMs. |
 
 ### Phase 4 — Plan
 
@@ -204,14 +205,14 @@ flowchart TD
 | **Trigger** | `repository_dispatch` with `event_type: agent-plan` in each product repo |
 | **Workflow** | `app-poc-1/.github/workflows/agentic.yml` or `app-poc-2/...` → calls `agentic-pipeline/agent-plan.yml@v1` |
 | **Agent** | `frontend-engineer` (app-poc-1) or `backend-engineer` (app-poc-2) |
-| **Loop** | Each human comment re-triggers planning iteration while `status-planning` is present |
+| **Loop** | Each human comment re-triggers planning iteration while `planning` is present |
 | **Gate** | Human comments `plan-approved` on the sub-issue |
 
 ### Phase 5 — Implement
 
 | Field | Detail |
 |---|---|
-| **Trigger** | `issue_comment.created` containing `plan-approved` on a sub-issue with `status-planning` label |
+| **Trigger** | `issue_comment.created` containing `plan-approved` on a sub-issue with `planning` label |
 | **Workflow** | `agentic.yml` → calls `agentic-pipeline/agent-dev.yml@v1` |
 | **Agent** | Same role as planning (`frontend-engineer` or `backend-engineer`) |
 | **Quality gates** | Runs `build` and `test` after implementation. Configurable in `.agentic/config.yml` under `gates:` |
@@ -291,12 +292,13 @@ app-poc-2            → cli: codex · execution_target: cloud · backend-engine
 | Event | Repo | Condition | Job triggered | Calls |
 |---|---|---|---|---|
 | `issues.opened` | `poc-agentic-intake` | — | `brainstorm-start` | `agent-brainstorm.yml@v1` |
-| `issue_comment.created` | `poc-agentic-intake` | sender ≠ bot + `status-brainstorming` label + no `status-awaiting-codex-response` | `brainstorm-continue` | `agent-brainstorm.yml@v1` |
-| `issue_comment.created` | `poc-agentic-intake` | sender = `chatgpt-codex-connector[bot]` + `status-awaiting-codex-response` | `codex-response-received` | _(inline steps)_ |
-| `issues.labeled` | `poc-agentic-intake` | label = `status-scope-defined` | `propose-scope` | `agent-lead.yml@v1` |
+| `issue_comment.created` | `poc-agentic-intake` | sender ≠ bot + `brainstorming` label + no `awaiting-agent-response` + no `<!-- pipe:` | `brainstorm-continue` | `agent-brainstorm.yml@v1` |
+| `issue_comment.created` | `poc-agentic-intake` | sender = `chatgpt-codex-connector[bot]` + `awaiting-agent-response` | `codex-response-received` | _(inline steps)_ |
+| `issues.labeled` | `poc-agentic-intake` | label = `scope-defined` | `propose-scope` | `agent-lead.yml@v1` |
+| `issue_comment.created` | `poc-agentic-intake` | sender ≠ bot + `awaiting-scope-approval` label + no `<!-- pipe:` | `scope-continue` | `agent-lead.yml@v1` |
 | `issues.labeled` | `poc-agentic-intake` | label = `scope-approved` | `fanout` | `agent-dispatch.yml@v1` |
 | `repository_dispatch` | `app-poc-1`, `app-poc-2` | type = `agent-plan` | `implement` | `agent-plan.yml@v1` |
-| `issue_comment.created` | `app-poc-1`, `app-poc-2` | comment = `plan-approved` + `status-planning` label | `implement` | `agent-dev.yml@v1` |
+| `issue_comment.created` | `app-poc-1`, `app-poc-2` | comment = `plan-approved` + `planning` label | `implement` | `agent-dev.yml@v1` |
 
 ---
 
@@ -308,18 +310,17 @@ When `execution_target: cloud` is active, the pipeline becomes a state machine d
 stateDiagram-v2
     [*] --> brainstorming : issues.opened\nbrainstorm-start fires
 
-    brainstorming --> awaiting_codex : @codex dispatched\nstatus-awaiting-codex-response applied
+    brainstorming --> awaiting_codex : @codex dispatched\nawaiting-agent-response applied
     awaiting_codex --> brainstorming : codex → ask\nhuman replies → brainstorm-continue fires
-    awaiting_codex --> scope_defined : codex → approved\nstatus-scope-defined applied
+    awaiting_codex --> scope_defined : codex → approved\nscope-defined applied
 
     brainstorming --> scope_defined : [local mode]\nPO returns approved
 
-    scope_defined --> awaiting_scope : agent-lead fires\nTech Lead posts proposal
+    scope_defined --> awaiting_scope : agent-lead fires\nTech Lead posts proposal + pipe:lead
     awaiting_scope --> awaiting_codex_lead : [cloud] @codex dispatched
-    awaiting_codex_lead --> hitl1 : codex → ok\nproposal posted as comment
-    awaiting_scope --> hitl1 : [local] proposal posted
-
-    hitl1 --> implementing : human applies scope-approved\nfanout creates sub-issues
+    awaiting_codex_lead --> awaiting_scope : codex → ok\nproposal posted → scope-continue listens
+    awaiting_scope --> awaiting_scope : human requests changes\nscope-continue → agent revises
+    awaiting_scope --> implementing : human approves via comment\nagent applies scope-approved\nfanout creates sub-issues
 
     implementing --> planning : repository_dispatch(agent-plan)\nper product repo
     planning --> awaiting_codex_plan : [cloud] @codex dispatched
@@ -341,13 +342,13 @@ stateDiagram-v2
 Codex bot posts comment
   └── codex-response-received job fires (on-issue.yml in intake)
         ├── extracts <!-- codex:status:X --> marker from comment body
-        ├── removes status-awaiting-codex-response label
+        ├── removes awaiting-agent-response label
         ├── reads current labels to identify stage
         └── applies transition:
-              brainstorming + ask     → keep status-brainstorming
-              brainstorming + approved → remove status-brainstorming
-                                         add status-scope-defined
-              awaiting-scope + ok     → keep for human review (scope-approved)
+              brainstorming + ask     → keep brainstorming
+              brainstorming + approved → remove brainstorming
+                                         add scope-defined
+              awaiting-scope + ok     → post proposal comment; scope-continue now handles human replies
               escalated               → remove labels, log, stop
 ```
 

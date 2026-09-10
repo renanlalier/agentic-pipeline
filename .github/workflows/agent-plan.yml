@@ -6,7 +6,7 @@ name: agent-plan (reusable)
 # backend-engineer) + the writing-plans skill (with the iteration section).
 #
 # status "ask"      -> posts a question OR the proposed plan (kind indicates
-#                      which), keeps status-planning
+#                      which), keeps planning
 # status "approved" -> marks the last published plan as final
 #                      (<!-- pipe:plan-final -->), adds plan-approved label
 #                      (the caller listens for this label to trigger
@@ -89,7 +89,7 @@ jobs:
           echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
           echo "resolved: $EXEC_ID"
 
-      - name: Build conversation (sub-issue + comments so far)
+      - name: Build conversation (sub-issue + last 5 comments)
         id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,7 +101,9 @@ jobs:
           TITLE=$(jq -r '.title' subissue.json)
           BODY=$(jq -r '.body // ""' subissue.json)
 
-          gh api "repos/$REPO/issues/$SUB_ISSUE/comments" > comments.json
+          gh api "repos/$REPO/issues/$SUB_ISSUE/comments" > all_comments.json
+          TOTAL=$(jq 'length' all_comments.json)
+          jq '.[-5:]' all_comments.json > comments.json
           N=$(jq 'length' comments.json)
 
           DELIM=$(openssl rand -hex 16)
@@ -117,8 +119,8 @@ jobs:
             echo "## Reference contract"
             echo "${{ inputs.contract_ref }}"
             echo ""
-            if [ "$N" -gt 0 ]; then
-              echo "## Conversation so far ($N comment(s), in order)"
+            if [ "$TOTAL" -gt 0 ]; then
+              echo "## Conversation so far (last $N of $TOTAL comment(s), in order)"
               echo "Comments marked with [PIPE] are your own previous turns;"
               echo "the others are from the human."
               jq -r '.[] | (if (.body | contains("<!-- pipe:plan -->")) then "**[PIPE]**" else "**[HUMAN] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
@@ -139,7 +141,7 @@ jobs:
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
-          echo "comment rounds so far: $N"
+          echo "comment rounds so far: $TOTAL (sending last $N)"
 
       - name: Execute role (planning turn)
         id: agent
@@ -181,9 +183,9 @@ jobs:
           case "$STATUS" in
             dispatched_to_cloud)
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=status-planning" >/dev/null
+                -f "labels[]=planning" >/dev/null
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=status-awaiting-codex-response" >/dev/null
+                -f "labels[]=awaiting-agent-response" >/dev/null
               echo "Dispatched to Codex Cloud — waiting for planning bot response on sub-issue #$SUB_ISSUE."
               ;;
 
@@ -208,7 +210,7 @@ jobs:
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=status-planning" >/dev/null
+                -f "labels[]=planning" >/dev/null
               ;;
 
             approved)
@@ -260,7 +262,7 @@ jobs:
 
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
                 -f "labels[]=plan-approved" >/dev/null
-              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/status-planning" >/dev/null 2>&1 || true
+              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/planning" >/dev/null 2>&1 || true
               ;;
 
             escalated)

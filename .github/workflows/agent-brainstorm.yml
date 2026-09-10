@@ -4,9 +4,9 @@ name: agent-brainstorm (reusable)
 # opens, and again for each human comment while the dialogue is still open.
 # Uses the PO role + brainstorming skill (adapted from obra/superpowers).
 #
-# status "ask"      -> posts the question, keeps status-brainstorming
-# status "approved" -> fills the ## Scope section in the issue body,
-#                      changes to status-scope-defined (the caller's
+# status "ask"      -> posts the question, keeps brainstorming
+# status "approved" -> fills the ### Scope section in the issue body,
+#                      changes to scope-defined (the caller's
 #                      on-issue.yml listens for this label to trigger
 #                      agent-lead, which proposes affected repos)
 # status "escalated" -> posts the reason and stops (round count exceeded
@@ -66,7 +66,7 @@ jobs:
           ref: v1
           path: .platform
 
-      - name: Build conversation (issue + comments so far)
+      - name: Build conversation (issue + last 5 comments)
         id: context
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
@@ -78,7 +78,9 @@ jobs:
           TITLE=$(jq -r '.title' issue.json)
           BODY=$(jq -r '.body // ""' issue.json)
 
-          gh api "repos/$REPO/issues/$ISSUE/comments" > comments.json
+          gh api "repos/$REPO/issues/$ISSUE/comments" > all_comments.json
+          TOTAL=$(jq 'length' all_comments.json)
+          jq '.[-5:]' all_comments.json > comments.json
           N=$(jq 'length' comments.json)
 
           {
@@ -88,8 +90,8 @@ jobs:
             echo ""
             echo "$BODY"
             echo ""
-            if [ "$N" -gt 0 ]; then
-              echo "## Conversation so far ($N comment(s), in order)"
+            if [ "$TOTAL" -gt 0 ]; then
+              echo "## Conversation so far (last $N of $TOTAL comment(s), in order)"
               echo "Comments marked with [PIPE] are your own previous turns;"
               echo "the others are from the human."
               jq -r '.[] | (if (.body | contains("<!-- pipe:brainstorm -->")) then "**[PIPE]**" else "**[HUMAN] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
@@ -106,7 +108,7 @@ jobs:
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
 
-          echo "comment rounds so far: $N"
+          echo "comment rounds so far: $TOTAL (sending last $N)"
 
       - name: Execute PO role
         id: agent
@@ -149,9 +151,9 @@ jobs:
           case "$STATUS" in
             dispatched_to_cloud)
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=status-brainstorming" >/dev/null
+                -f "labels[]=brainstorming" >/dev/null
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=status-awaiting-codex-response" >/dev/null
+                -f "labels[]=awaiting-agent-response" >/dev/null
               echo "Dispatched to Codex Cloud — waiting for bot response on issue #$ISSUE."
               ;;
 
@@ -168,26 +170,17 @@ jobs:
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=status-brainstorming" >/dev/null
+                -f "labels[]=brainstorming" >/dev/null
               ;;
 
             approved)
               SCOPE=$(jq -r '.scope' agent_result.json)
 
-              # replace the "## Scope" placeholder in the body with the filled version
-              # reuses issue.json already saved in the previous step
+              # Replace ### Scope section idempotently (works whether or not the section
+              # exists already — the textarea field may be blank on first submission).
               CURRENT_BODY=$(jq -r '.body // ""' issue.json)
-              NEW_BODY=$(awk -v scope="$SCOPE" '
-                BEGIN{done=0}
-                /^## Scope/{
-                  print; print "";
-                  print scope;
-                  skip=1; done=1; next
-                }
-                skip && /^## /{ skip=0 }
-                skip{ next }
-                { print }
-              ' <<< "$CURRENT_BODY")
+              BASE_BODY=$(printf '%s' "$CURRENT_BODY" | sed '/^### Scope$/,$d' | sed 's/[[:space:]]*$//')
+              NEW_BODY="$(printf '%s\n\n### Scope\n\n%s' "$BASE_BODY" "$SCOPE")"
 
               jq -n --arg body "$NEW_BODY" '{body: $body}' > body_payload.json
               gh api -X PATCH "repos/$REPO/issues/$ISSUE" --input body_payload.json
@@ -203,8 +196,8 @@ jobs:
               gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$ISSUE/labels" \
-                -f "labels[]=status-scope-defined" >/dev/null
-              gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-brainstorming" >/dev/null 2>&1 || true
+                -f "labels[]=scope-defined" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/brainstorming" >/dev/null 2>&1 || true
               ;;
 
             escalated)

@@ -228,7 +228,7 @@ jobs:
           SUB_ISSUE: ${{ inputs.sub_issue }}
         run: |
           gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-            -f "labels[]=status-awaiting-codex-response" >/dev/null
+            -f "labels[]=awaiting-agent-response" >/dev/null
           echo "Dispatched to Codex Cloud — waiting for implementation bot response on sub-issue #$SUB_ISSUE."
 
       - name: Materialize the change

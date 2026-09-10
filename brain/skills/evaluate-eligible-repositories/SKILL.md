@@ -43,3 +43,6 @@ excerpt — all fetched live when this execution started. Infrastructure repos
 Each `reason` in the `repos` array must cite what specifically in the
 fingerprint (the description, README, or demand) led to inclusion —
 "seems related" is not an acceptable justification.
+
+Do not produce any output for repositories you decided to exclude. The `repos`
+array must contain only included repositories; excluded ones are silently omitted.

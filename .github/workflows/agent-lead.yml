@@ -6,6 +6,13 @@ name: agent-lead (reusable)
 # to the Tech Lead agent via semantic judgment — not keyword matching.
 # Does not create sub-issues: that only happens after human approval (HITL 1).
 #
+# This workflow is called in two modes:
+#   - Initial proposal (propose-scope job in on-issue.yml): no prior <!-- pipe:lead -->
+#     comment exists; the agent produces the first scope proposal.
+#   - Iteration (scope-continue job in on-issue.yml): a prior <!-- pipe:lead -->
+#     comment exists; the agent reviews the human's comment and either revises
+#     the proposal or sets status "approved" to apply the scope-approved label.
+#
 # NOTE: we use `gh api` (REST) instead of `gh issue comment`/`gh issue edit`.
 # Fine-grained tokens have incomplete support for GraphQL mutations.
 #
@@ -70,6 +77,37 @@ jobs:
           echo "--- issue content read ---"
           cat issue.txt
 
+      - name: Detect iteration mode (prior scope proposal exists)
+        id: mode
+        env:
+          GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$ISSUE/comments" > all_comments.json
+
+          # Find the most recent comment with the <!-- pipe:lead --> marker
+          PRIOR_PROPOSAL=$(jq -r '[.[] | select(.body | contains("<!-- pipe:lead -->"))] | last | .body // ""' all_comments.json)
+
+          if [ -n "$PRIOR_PROPOSAL" ] && [ "$PRIOR_PROPOSAL" != "null" ]; then
+            echo "mode=iteration" >> "$GITHUB_OUTPUT"
+            # Extract the human's triggering comment (last comment without pipe marker)
+            HUMAN_COMMENT=$(jq -r '[.[] | select(.body | contains("<!-- pipe:") | not)] | last | .body // ""' all_comments.json)
+            {
+              echo "prior_proposal<<PRIOREOF"
+              echo "$PRIOR_PROPOSAL"
+              echo "PRIOREOF"
+              echo "human_comment<<HUMANEOF"
+              echo "$HUMAN_COMMENT"
+              echo "HUMANEOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "Iteration mode: prior scope proposal detected."
+          else
+            echo "mode=initial" >> "$GITHUB_OUTPUT"
+            echo "Initial mode: no prior scope proposal."
+          fi
+
       - name: Discover eligible repos and build prompt
         id: context
         env:
@@ -77,8 +115,36 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           # Pipeline infrastructure — never implementation targets
           EXCLUDED: "agentic-pipeline poc-agentic-intake"
+          MODE: ${{ steps.mode.outputs.mode }}
+          PRIOR_PROPOSAL: ${{ steps.mode.outputs.prior_proposal }}
+          HUMAN_COMMENT: ${{ steps.mode.outputs.human_comment }}
         run: |
           set -euo pipefail
+
+          if [ "$MODE" = "iteration" ]; then
+            # Iteration mode: no need to re-fetch fingerprints; just pass the
+            # prior proposal and human comment so the agent can decide.
+            {
+              echo "prompt<<PROMPTEOF"
+              echo "MODE: SCOPE_ITERATION"
+              echo ""
+              echo "## Previous scope proposal"
+              printf '%s\n' "$PRIOR_PROPOSAL"
+              echo ""
+              echo "## Human comment"
+              printf '%s\n' "$HUMAN_COMMENT"
+              echo ""
+              echo "## Instruction"
+              echo "The human has responded to the scope proposal above."
+              echo "- If the human is approving the proposal as-is (e.g. 'approved', 'ok', 'looks good'), set status to \"approved\"."
+              echo "- If the human is requesting changes or corrections, revise the scope and set status to \"revised\"."
+              echo "- If the situation requires escalation, set status to \"escalated\"."
+              echo "Only explain repositories you are proposing as in-scope."
+              echo "Do not list or comment on repositories that are excluded."
+              echo "PROMPTEOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           : > fingerprints.md
 
@@ -115,6 +181,8 @@ jobs:
             echo "repositories are affected, with specific justification based on"
             echo "what you read in each repository's description and README —"
             echo "not on a fixed list of keywords."
+            echo "Only explain repositories you are proposing as in-scope."
+            echo "Do not list or comment on repositories that are excluded."
             echo ""
             echo "## Demand"
             cat issue.txt
@@ -163,15 +231,17 @@ jobs:
             true
           elif [ "$STATUS" = "escalated" ]; then
             echo "::warning::Tech Lead escalated instead of proposing scope. This is the system.md stop_condition acting — not a bug."
+          elif [ "$STATUS" = "approved" ]; then
+            echo "Human approved the scope proposal."
           else
             N_REPOS=$(jq -r '.repos | length' agent_result.json)
             if [ "$N_REPOS" -eq 0 ]; then
-              echo "::error::Agent returned status ok but proposed no repositories. Treating as escalation."
+              echo "::error::Agent returned status ok/revised but proposed no repositories. Treating as escalation."
               echo "status=escalated" >> "$GITHUB_OUTPUT"
             fi
           fi
 
-      - name: Publish scope proposal on the issue
+      - name: Publish scope proposal or handle approval on the issue
         env:
           GH_TOKEN: ${{ secrets.PIPE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -180,16 +250,17 @@ jobs:
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
           STATUS: ${{ steps.decision.outputs.status }}
+          MODE: ${{ steps.mode.outputs.mode }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
           if [ "$STATUS" = "dispatched_to_cloud" ]; then
             gh api "repos/$REPO/issues/$ISSUE/labels" \
-              -f "labels[]=status-awaiting-scope" >/dev/null
+              -f "labels[]=awaiting-scope-approval" >/dev/null
             gh api "repos/$REPO/issues/$ISSUE/labels" \
-              -f "labels[]=status-awaiting-codex-response" >/dev/null
-            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-new" >/dev/null 2>&1 || true
+              -f "labels[]=awaiting-agent-response" >/dev/null
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/new" >/dev/null 2>&1 || true
             echo "Dispatched to Codex Cloud — waiting for tech-lead bot response on issue #$ISSUE."
             exit 0
           fi
@@ -210,12 +281,33 @@ jobs:
               echo "No automatic stop condition failed here — the agent evaluated the"
               echo "eligible repositories discovered from the organization and found no"
               echo "safe match with sufficient judgment. Refine the demand and reopen."
+              echo "<!-- pipe:lead -->"
             } > comment.md
             jq -Rs '{body: .}' comment.md > payload.json
             gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
             exit 1
           fi
 
+          if [ "$STATUS" = "approved" ]; then
+            # Human approved the scope in a comment — apply label and confirm.
+            gh api "repos/$REPO/issues/$ISSUE/labels" \
+              -f "labels[]=scope-approved" >/dev/null
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/awaiting-scope-approval" >/dev/null 2>&1 || true
+
+            {
+              echo "**Scope approved.** Proceeding to fan-out — sub-issues will be created shortly."
+              echo ""
+              echo "---"
+              echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: scope approved_"
+              echo "<!-- pipe:lead -->"
+            } > comment.md
+            jq -Rs '{body: .}' comment.md > payload.json
+            gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+            echo "scope-approved label applied."
+            exit 0
+          fi
+
+          # status == "ok" (initial proposal) or "revised" (iteration)
           ISSUE_TYPE=$(jq -r '.issue_type // "task"' agent_result.json)
 
           {
@@ -233,8 +325,9 @@ jobs:
             echo ""
             echo "---"
             echo "**HITL 1 — scope approval.**"
-            echo "Apply the \`scope-approved\` label for the pipeline to create sub-issues"
-            echo "and start the planning loop. Correct the list above first if needed."
+            echo "Comment to approve or request changes. The pipeline will apply"
+            echo "\`scope-approved\` automatically when you approve."
+            echo "<!-- pipe:lead -->"
           } > comment.md
 
           cat comment.md
@@ -243,6 +336,6 @@ jobs:
           gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
 
           gh api "repos/$REPO/issues/$ISSUE/labels" \
-            -f "labels[]=status-awaiting-scope" >/dev/null
+            -f "labels[]=awaiting-scope-approval" >/dev/null
 
-          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/status-new" >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/new" >/dev/null 2>&1 || true
