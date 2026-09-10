@@ -93,6 +93,7 @@ jobs:
 
           gh api "repos/$PARENT_REPO_FULL/issues/$ISSUE" > parent.json
           PARENT_TITLE=$(jq -r .title parent.json)
+          PARENT_AUTHOR=$(jq -r '.user.login' parent.json)
           jq -r '.body // ""' parent.json > parent_body.txt
 
           while IFS='|' read -r REPO ROLE ISSUE_TYPE; do
@@ -144,6 +145,12 @@ jobs:
             gh api "repos/$OWNER/$REPO/issues/$CHILD_NUM/labels" \
               -f "labels[]=type/$ISSUE_TYPE" >/dev/null
             echo "stamped with type/$ISSUE_TYPE"
+
+            # stamp the requester so agent-plan and agent-dev can recover it
+            # without access to the parent repo
+            gh api "repos/$OWNER/$REPO/issues/$CHILD_NUM/labels" \
+              -f "labels[]=requester:$PARENT_AUTHOR" >/dev/null
+            echo "stamped with requester:$PARENT_AUTHOR"
 
             gh api "repos/$OWNER/$REPO/dispatches" \
               -f event_type=agent-plan \

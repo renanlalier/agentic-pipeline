@@ -128,7 +128,8 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
-          REQUESTER=$(jq -r '.user.login // ""' subissue.json)
+          REQUESTER=$(jq -r '.labels[].name' subissue.json \
+            | grep '^requester:' | sed 's/^requester://' | head -1 || true)
           echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
           TITLE=$(jq -r '.title' subissue.json)
           BODY=$(jq -r '.body // ""' subissue.json)

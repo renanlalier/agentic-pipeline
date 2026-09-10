@@ -166,15 +166,17 @@ jobs:
         run: |
           set -euo pipefail
           EXEC_ID="${{ inputs.execution_id }}"
+          gh api "repos/$REPO/issues/$SUB_ISSUE" --jq '.labels[].name' > subissue_labels.txt || true
           if [ -z "$EXEC_ID" ]; then
-            EXEC_ID=$(gh api "repos/$REPO/issues/$SUB_ISSUE" --jq '.labels[].name' \
-              | grep '^execution:' | sed 's/^execution://' | head -1 || true)
+            EXEC_ID=$(grep '^execution:' subissue_labels.txt | sed 's/^execution://' | head -1 || true)
           fi
           if [ -z "$EXEC_ID" ]; then
             echo "::error::execution_id was not provided as input and no execution:* label exists on the sub-issue."
             exit 1
           fi
+          REQUESTER=$(grep '^requester:' subissue_labels.txt | sed 's/^requester://' | head -1 || true)
           echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
+          echo "requester=$REQUESTER"  >> "$GITHUB_OUTPUT"
 
       - name: Prove isolation
         run: |
@@ -256,6 +258,7 @@ jobs:
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
           secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
+          requester: ${{ steps.exec.outputs.requester }}
 
       - name: Apply cloud dispatch labels
         if: steps.mode.outputs.target == 'cloud'
