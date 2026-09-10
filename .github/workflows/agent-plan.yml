@@ -56,6 +56,10 @@ on:
         required: false
         type: string
         default: ""
+      requester:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   plan:
@@ -100,6 +104,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Export vault env vars (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        run: echo "AZURE_VAULT_URL=${{ vars.AZURE_VAULT_URL }}" >> "$GITHUB_ENV"
+
       - name: Resolve execution_id (input or sub-issue label)
         id: exec
         env:
@@ -129,20 +137,11 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
-          REQUESTER=$(jq -r '.labels[].name' subissue.json \
-            | grep '^requester:' | sed 's/^requester://' | head -1 || true)
-          # Fallback for sub-issues created before the requester: label was added:
-          # extract the parent issue reference from the body and fetch its author.
+          # Priority: (1) workflow input from dispatch payload, (2) requester: label on sub-issue
+          REQUESTER="${{ inputs.requester }}"
           if [ -z "$REQUESTER" ]; then
-            ORIGIN_LINE=$(jq -r '.body // ""' subissue.json | grep '^\*\*Origin:\*\*' | head -1 || true)
-            if [ -n "$ORIGIN_LINE" ]; then
-              PARENT_REF=$(echo "$ORIGIN_LINE" | sed 's/.*\*\*Origin:\*\* *//')
-              PARENT_REPO=$(echo "$PARENT_REF" | cut -d'#' -f1)
-              PARENT_NUM=$(echo "$PARENT_REF" | cut -d'#' -f2)
-              REQUESTER=$(gh api "repos/$PARENT_REPO/issues/$PARENT_NUM" --jq '.user.login // empty' 2>/dev/null || true)
-              # Discard if gh api returned a JSON error body instead of a plain username.
-              [[ "$REQUESTER" == *"{"* ]] && REQUESTER=""
-            fi
+            REQUESTER=$(jq -r '.labels[].name' subissue.json \
+              | grep '^requester:' | sed 's/^requester://' | head -1 || true)
           fi
           echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
           TITLE=$(jq -r '.title' subissue.json)

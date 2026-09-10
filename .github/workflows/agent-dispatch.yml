@@ -159,7 +159,8 @@ jobs:
               -f "client_payload[role]=$ROLE" \
               -f "client_payload[contract_ref]=v1" \
               -f "client_payload[cli_override]=$CLI_OVERRIDE" \
-              -f "client_payload[model_override]=$MODEL_OVERRIDE"
+              -f "client_payload[model_override]=$MODEL_OVERRIDE" \
+              -f "client_payload[requester]=$PARENT_AUTHOR"
             echo "repository_dispatch sent (agent-plan)"
             echo "::endgroup::"
           done < scope.txt
