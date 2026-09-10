@@ -368,12 +368,8 @@ runs:
         fi
 
         # Synthetic result: execution happens in Codex Cloud — emit thin envelope with dispatched status marker.
-        SYNTHETIC_BODY="Agente: ${ROLE}
-
-Tarefa despachada para o Codex Cloud (issue #${ISSUE_NUMBER} em ${REPO_FULL_NAME}).
-Aguardando resposta do bot.
-
-<!-- codex:status:dispatched_to_cloud -->"
+        SYNTHETIC_BODY=$(printf 'Agente: %s\n\nTarefa despachada para o Codex Cloud (issue #%s em %s).\nAguardando resposta do bot.\n\n<!-- codex:status:dispatched_to_cloud -->' \
+          "${ROLE}" "${ISSUE_NUMBER}" "${REPO_FULL_NAME}")
         jq -n --arg body "$SYNTHETIC_BODY" \
           '{ body: $body, token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }' \
           > /tmp/agent-result-${{ github.run_id }}.json
