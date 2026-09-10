@@ -258,8 +258,6 @@ jobs:
           if [ "$STATUS" = "dispatched_to_cloud" ]; then
             gh api "repos/$REPO/issues/$ISSUE/labels" \
               -f "labels[]=awaiting-scope-approval" >/dev/null
-            gh api "repos/$REPO/issues/$ISSUE/labels" \
-              -f "labels[]=awaiting-agent-response" >/dev/null
             gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/new" >/dev/null 2>&1 || true
             echo "Dispatched to Codex Cloud — waiting for tech-lead bot response on issue #$ISSUE."
             exit 0
