@@ -25,8 +25,12 @@ set -euo pipefail
 : "${SYSTEM_FILE:?}"
 : "${EXECUTION_ID:?}"
 
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-  echo "::error::ANTHROPIC_API_KEY not configured. Use cli: dry-run to run without a key." >&2
+# Claude CLI uses ANTHROPIC_AUTH_TOKEN; accept ANTHROPIC_API_KEY as alias.
+if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  export ANTHROPIC_AUTH_TOKEN="$ANTHROPIC_API_KEY"
+fi
+if [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  echo "::error::ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) not configured. Use cli: dry-run to run without a key." >&2
   exit 1
 fi
 
@@ -110,11 +114,11 @@ EOF
 )
 
 # ── Run (stream-json for token usage) ────────────────────────────────────────
+export ANTHROPIC_MODEL="${MODEL}"
 RAW=$(claude \
   --print \
   --verbose \
   --output-format stream-json \
-  --model "$MODEL" \
   --system-prompt "$(cat "$SYSTEM_FILE")" \
   "$FULL_PROMPT")
 
