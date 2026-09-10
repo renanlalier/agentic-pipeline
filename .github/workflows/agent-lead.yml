@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: ""
+      requester:
+        description: "GitHub username of the demand author. Used to look up per-user credentials in the vault."
+        required: false
+        type: string
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -263,6 +268,7 @@ jobs:
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
           secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
+          requester: ${{ inputs.requester }}
 
       - name: Publish scope proposal or handle approval on the issue
         env:

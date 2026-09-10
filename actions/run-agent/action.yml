@@ -44,6 +44,10 @@ inputs:
     description: "'github-secrets' (default) or 'vault' — where to fetch CLI API keys from"
     required: false
     default: "github-secrets"
+  requester:
+    description: "GitHub username of the demand author. Used to look up per-user credentials in the vault."
+    required: false
+    default: ""
 
 outputs:
   cli:
@@ -262,23 +266,32 @@ runs:
         chmod +x "$PLAT/vault/vault.sh"
         source "$PLAT/vault/vault.sh"
 
-        SECRET_VAL=$(vault_get "$SECRET_NAME")
+        # Per-user isolation: append the requester's GitHub username.
+        # Secrets are stored as e.g. ANTHROPIC-API-KEY--renanlalier
+        REQUESTER="${{ inputs.requester }}"
+        if [ -z "$REQUESTER" ]; then
+          echo "::error::requester input is empty. The calling workflow must pass the issue author's GitHub username."
+          exit 1
+        fi
+        FULL_SECRET_NAME="${SECRET_NAME}--${REQUESTER}"
+
+        SECRET_VAL=$(vault_get "$FULL_SECRET_NAME")
         if [ -z "$SECRET_VAL" ]; then
-          echo "::error::vault_get returned an empty value for $SECRET_NAME. Run verify-secrets in agentic-credentials to diagnose."
+          echo "::error::vault_get returned an empty value for $FULL_SECRET_NAME. Run register-secret in agentic-credentials for user '$REQUESTER' and CLI '$CLI'."
           exit 1
         fi
 
         echo "::add-mask::$SECRET_VAL"
         echo "${ENV_VAR}=${SECRET_VAL}" >> "$GITHUB_ENV"
-        echo "Fetched $SECRET_NAME from vault → set as $ENV_VAR (masked)"
+        echo "Fetched $FULL_SECRET_NAME from vault → set as $ENV_VAR (masked)"
 
         # Also fetch CONTEXT7_API_KEY if not already set (optional, best-effort).
         if [ -z "${CONTEXT7_API_KEY:-}" ]; then
-          CTX_VAL=$(vault_get "CONTEXT7-API-KEY" 2>/dev/null || true)
+          CTX_VAL=$(vault_get "CONTEXT7-API-KEY--${REQUESTER}" 2>/dev/null || true)
           if [ -n "$CTX_VAL" ]; then
             echo "::add-mask::$CTX_VAL"
             echo "CONTEXT7_API_KEY=$CTX_VAL" >> "$GITHUB_ENV"
-            echo "Fetched CONTEXT7-API-KEY from vault → set as CONTEXT7_API_KEY (masked)"
+            echo "Fetched CONTEXT7-API-KEY--${REQUESTER} from vault → set as CONTEXT7_API_KEY (masked)"
           fi
         fi
 
