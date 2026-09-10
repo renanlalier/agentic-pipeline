@@ -112,6 +112,7 @@ EOF
 # ── Run (stream-json for token usage) ────────────────────────────────────────
 RAW=$(claude \
   --print \
+  --verbose \
   --output-format stream-json \
   --model "$MODEL" \
   --system-prompt "$(cat "$SYSTEM_FILE")" \
