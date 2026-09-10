@@ -28,12 +28,7 @@ DISPLAY_NAME=$(yq '.display_name // ""' "$AGENT_YML")
 # Folded YAML scalar '>': yq returns the value with a trailing newline; strip it.
 DESC=$(yq '.description' "$AGENT_YML" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
-# Extract system prompt minus the <output_format> block — that block is for
-# local/CI execution (JSON output consumed by the workflow). In Codex Cloud the
-# agent's response becomes a GitHub comment automatically via the connector, so
-# the output contract is different and defined below.
-SYSTEM=$(yq '.system' "$AGENT_YML" | \
-  sed '/<output_format>/,/<\/output_format>/d')
+SYSTEM=$(yq '.system' "$AGENT_YML")
 
 printf 'name = "%s"\n' "$NAME"
 printf 'description = "%s"\n\n' "$DESC"
@@ -58,43 +53,6 @@ while IFS= read -r skill_name; do
     printf '::warning::cloud_skill "%s" not found: %s\n' "$skill_name" "$SKILL_FILE" >&2
   fi
 done < <(yq '.cloud_skills[]' "$AGENT_YML" 2>/dev/null || true)
-
-# Cloud-mode output contract: replaces the <output_format> block stripped above.
-# If a per-role cloud_output_format.txt exists, use it; otherwise fall back to
-# the generic format below.
-CLOUD_FORMAT_FILE="$SCRIPT_DIR/$ROLE/cloud_output_format.txt"
-if [ -f "$CLOUD_FORMAT_FILE" ]; then
-  cat "$CLOUD_FORMAT_FILE"
-else
-cat << 'CLOUD_STATIC_BEFORE'
-
-<output_format>
-You are running in Codex Cloud. Your response will be posted automatically as
-a GitHub comment by the Codex connector — do NOT call `gh`, `git`, or any
-shell command to post comments. Just write your reply.
-
-IMPORTANT: Always write your response in English, regardless of the language
-used in the issue or comments. This is a hard requirement.
-
-Start every response with the following identification field as the very first line:
-
-CLOUD_STATIC_BEFORE
-printf '  Agente: %s\n\n' "$DISPLAY_NAME"
-cat << 'CLOUD_STATIC_AFTER'
-Then write your response body in natural language markdown:
-- If you have a question: write it clearly and conversationally.
-- If you have a proposal or conclusion: write it clearly and conversationally.
-- If escalating: explain why briefly.
-
-Append exactly ONE of the following invisible HTML markers as the very last
-line of your response. They will not be visible to readers.
-
-- You have a question or need clarification: <!-- codex:status:ask -->
-- Proposal or task complete: <!-- codex:status:ok -->
-- Human escalation required: <!-- codex:status:escalated -->
-</output_format>
-CLOUD_STATIC_AFTER
-fi
 
 printf '"""\n'
 

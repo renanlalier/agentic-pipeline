@@ -40,6 +40,10 @@ inputs:
     description: "Token for posting the @codex comment in cloud mode (PIPE_TOKEN or GITHUB_TOKEN)"
     required: false
     default: ""
+  secrets_source:
+    description: "'github-secrets' (default) or 'vault' — where to fetch CLI API keys from"
+    required: false
+    default: "github-secrets"
 
 outputs:
   cli:
@@ -48,8 +52,10 @@ outputs:
     value: ${{ steps.resolve.outputs.model }}
   execution_target:
     value: ${{ steps.resolve.outputs.execution_target }}
-  result:
-    value: ${{ steps.emit.outputs.result }}
+  body:
+    value: ${{ steps.emit.outputs.body }}
+  status:
+    value: ${{ steps.emit.outputs.status }}
 
 runs:
   using: composite
@@ -226,6 +232,56 @@ runs:
         echo "x-execution-target: ${{ steps.resolve.outputs.execution_target }}"
         echo "x-repo: ${{ github.repository }}"
 
+    - name: Fetch secrets from vault
+      if: inputs.secrets_source == 'vault'
+      shell: bash
+      env:
+        CLI: ${{ steps.resolve.outputs.cli }}
+        PLAT: ${{ inputs.platform_path }}
+        AZURE_VAULT_URL: ${{ env.AZURE_VAULT_URL }}
+        VAULT_CONFIG_FILE: ${{ inputs.platform_path }}/config/vault.yml
+      run: |
+        set -euo pipefail
+
+        # Map CLI to vault secret name and env var name.
+        # Azure Key Vault names use hyphens (underscores are not allowed).
+        case "$CLI" in
+          claude-code) SECRET_NAME="ANTHROPIC-API-KEY"; ENV_VAR="ANTHROPIC_API_KEY" ;;
+          codex)       SECRET_NAME="OPENAI-API-KEY";    ENV_VAR="OPENAI_API_KEY"    ;;
+          cursor)      SECRET_NAME="CURSOR-API-KEY";    ENV_VAR="CURSOR_API_KEY"    ;;
+          dry-run)
+            echo "cli is dry-run — no secret needed from vault"
+            exit 0
+            ;;
+          *)
+            echo "cli '$CLI' — no vault mapping defined, skipping"
+            exit 0
+            ;;
+        esac
+
+        chmod +x "$PLAT/vault/vault.sh"
+        source "$PLAT/vault/vault.sh"
+
+        SECRET_VAL=$(vault_get "$SECRET_NAME")
+        if [ -z "$SECRET_VAL" ]; then
+          echo "::error::vault_get returned an empty value for $SECRET_NAME. Run verify-secrets in agentic-credentials to diagnose."
+          exit 1
+        fi
+
+        echo "::add-mask::$SECRET_VAL"
+        echo "${ENV_VAR}=${SECRET_VAL}" >> "$GITHUB_ENV"
+        echo "Fetched $SECRET_NAME from vault → set as $ENV_VAR (masked)"
+
+        # Also fetch CONTEXT7_API_KEY if not already set (optional, best-effort).
+        if [ -z "${CONTEXT7_API_KEY:-}" ]; then
+          CTX_VAL=$(vault_get "CONTEXT7-API-KEY" 2>/dev/null || true)
+          if [ -n "$CTX_VAL" ]; then
+            echo "::add-mask::$CTX_VAL"
+            echo "CONTEXT7_API_KEY=$CTX_VAL" >> "$GITHUB_ENV"
+            echo "Fetched CONTEXT7-API-KEY from vault → set as CONTEXT7_API_KEY (masked)"
+          fi
+        fi
+
     - name: Generate and commit Codex agent TOML
       id: codex_toml
       if: ${{ steps.resolve.outputs.execution_target == 'cloud' && steps.resolve.outputs.cli == 'codex' }}
@@ -294,9 +350,16 @@ runs:
             >/dev/null 2>&1 || true
         fi
 
-        # Synthetic result: token_usage is zero (execution happens in Codex Cloud).
-        SYNTHETIC="{\"role\":\"${ROLE}\",\"execution_id\":\"${EXECUTION_ID}\",\"status\":\"dispatched_to_cloud\",\"token_usage\":{\"input_tokens\":0,\"output_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}"
-        printf '%s\n' "$SYNTHETIC" > /tmp/agent-result-${{ github.run_id }}.json
+        # Synthetic result: execution happens in Codex Cloud — emit thin envelope with dispatched status marker.
+        SYNTHETIC_BODY="Agente: ${ROLE}
+
+Tarefa despachada para o Codex Cloud (issue #${ISSUE_NUMBER} em ${REPO_FULL_NAME}).
+Aguardando resposta do bot.
+
+<!-- codex:status:dispatched_to_cloud -->"
+        jq -n --arg body "$SYNTHETIC_BODY" \
+          '{ body: $body, token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }' \
+          > /tmp/agent-result-${{ github.run_id }}.json
 
         echo "" >> "$GITHUB_STEP_SUMMARY"
         echo "**Dispatched to Codex Cloud** — awaiting bot response" >> "$GITHUB_STEP_SUMMARY"
@@ -359,9 +422,20 @@ runs:
           echo "::error::No result file produced by dispatch step — check previous steps for errors."
           exit 1
         fi
-        RESULT=$(cat "$RESULT_FILE")
+
+        ENVELOPE=$(cat "$RESULT_FILE")
+        BODY=$(printf '%s\n' "$ENVELOPE" | jq -r '.body // ""')
+
+        # Extract status marker from HTML comment embedded in body.
+        STATUS=$(printf '%s\n' "$BODY" | grep -oP '(?<=<!-- codex:status:)[^>]+(?= -->)' | tail -1 || true)
+        [ -z "$STATUS" ] && STATUS="unknown"
+
         {
-          echo "result<<AGENTEOF"
-          printf '%s\n' "$RESULT"
+          echo "body<<AGENTEOF"
+          printf '%s\n' "$BODY"
           echo "AGENTEOF"
+          echo "status=$STATUS"
         } >> "$GITHUB_OUTPUT"
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+        echo "**Agent status:** \`$STATUS\`" >> "$GITHUB_STEP_SUMMARY"

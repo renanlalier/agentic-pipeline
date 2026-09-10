@@ -130,14 +130,16 @@ jobs:
             fi
             echo ""
             echo "## Instruction"
-            echo "Apply the writing-plans skill, iteration section. Respond"
-            echo "using THIS format for this call (not the default output_format"
-            echo "from your system.md, which is only for the implementation phase):"
-            echo '{"role","execution_id","status":"ask|approved|escalated",'
-            echo ' "kind":"question|plan","content","notes"}'
-            echo "Use kind=plan when content is the proposed plan; kind=question"
-            echo "when it is a question. status=approved only when the last"
-            echo "HUMAN comment explicitly approves a prior [PIPE] plan."
+            echo "Apply the writing-plans skill, iteration section."
+            echo "For this planning phase (not the implementation phase), use this output format:"
+            echo "- Write natural language markdown."
+            echo "- When proposing a plan, start the content block with '## Proposed plan'."
+            echo "- When asking a question, start the content block with '## Question'."
+            echo "- End your response with exactly one status marker on its own line:"
+            echo "  <!-- codex:status:ask --> when posting a plan or question for review"
+            echo "  <!-- codex:status:approved --> when the last HUMAN comment explicitly"
+            echo "  approves a prior [PIPE] plan (do not use this status on your own initiative)"
+            echo "  <!-- codex:status:escalated --> to stop and request human intervention"
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
@@ -165,20 +167,13 @@ jobs:
           SUB_ISSUE: ${{ inputs.sub_issue }}
           EXEC_ID: ${{ steps.exec.outputs.execution_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          AGENT_RESULT: ${{ steps.agent.outputs.result }}
+          AGENT_BODY: ${{ steps.agent.outputs.body }}
+          STATUS: ${{ steps.agent.outputs.status }}
         run: |
           set -euo pipefail
-          printf '%s\n' "$AGENT_RESULT" > agent_result.json
 
-          echo "--- agent output ---"
-          cat agent_result.json
-
-          if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::Agent output is not valid JSON."
-            exit 1
-          fi
-
-          STATUS=$(jq -r '.status' agent_result.json)
+          echo "--- agent output (status: $STATUS) ---"
+          printf '%s\n' "$AGENT_BODY"
 
           case "$STATUS" in
             dispatched_to_cloud)
@@ -190,17 +185,8 @@ jobs:
               ;;
 
             ask)
-              KIND=$(jq -r '.kind' agent_result.json)
-              CONTENT=$(jq -r '.content' agent_result.json)
-              if [ "$KIND" = "plan" ]; then
-                HEADER="## Proposed plan"
-              else
-                HEADER="## Question"
-              fi
               {
-                echo "$HEADER"
-                echo ""
-                echo "$CONTENT"
+                printf '%s\n' "$AGENT_BODY"
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: planning_"
@@ -214,9 +200,9 @@ jobs:
               ;;
 
             approved)
-              # mark the last comment with "## Proposed plan" as the final plan,
+              # Mark the last comment with "## Proposed plan" as the final plan,
               # so agent-dev (implementation) can find it without re-reading the
-              # entire conversation
+              # entire conversation.
               LAST_PLAN_ID=$(gh api "repos/$REPO/issues/$SUB_ISSUE/comments" \
                 --jq '[.[] | select(.body | contains("## Proposed plan"))] | last | .id')
 
@@ -231,7 +217,7 @@ jobs:
                 echo "::warning::No comment with '## Proposed plan' found to mark as final."
               fi
 
-              # fill ## Technical Scope in the sub-issue body with the approved plan
+              # Fill ## Technical Scope in the sub-issue body with the approved plan.
               CURRENT_BODY=$(jq -r '.body // ""' subissue.json)
               export APPROVED_PLAN_CONTENT
               NEW_ISSUE_BODY=$(awk '
@@ -266,11 +252,8 @@ jobs:
               ;;
 
             escalated)
-              NOTES=$(jq -r '.notes' agent_result.json)
               {
-                echo "## Planning escalated"
-                echo ""
-                echo "$NOTES"
+                printf '%s\n' "$AGENT_BODY"
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)_"

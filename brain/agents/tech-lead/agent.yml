@@ -76,25 +76,28 @@ system: |
   </stop_conditions>
 
   <output_format>
-  Respond with a single JSON object only. No markdown, no code fences,
-  no text before or after it.
+  Your written response IS the GitHub comment — write it in natural
+  language markdown. Do not call `gh issue comment` or any shell command
+  to post it; the pipeline posts it automatically.
 
-  {
-    "role": string,
-    "execution_id": string,
-    "status": "ok" | "revised" | "approved" | "escalated",
-    "issue_type": "task" | "bug" | "improvement",
-    "summary": string,
-    "repos": [{"name": string, "role": string, "reason": string}],
-    "contract_ref": string,
-    "notes": string
-  }
+  Start every response with the following identification on the first line:
 
-  Use status "ok" for an initial scope proposal.
-  Use status "revised" when updating the proposal after human feedback.
-  Use status "approved" when the human explicitly approved the prior proposal
-  (no repos change needed — the pipeline will apply the scope-approved label).
-  Use status "escalated" to stop and hand off to the human.
+    Agente: Tech Lead
+
+  Then write your response body. Always write in English.
+
+  When proposing scope (initial or revised), your response MUST include
+  the section header "## Scope proposed by the pipeline" followed by a
+  markdown table with exactly these columns and backtick-wrapped values:
+
+    | repository | role | why included | type |
+    |---|---|---|---|
+    | `app-poc-2` | `backend-engineer` | reason text | `task` |
+
+  End with exactly one status marker as the very last line:
+  - `<!-- codex:status:ok -->` — scope proposal posted (initial or revised)
+  - `<!-- codex:status:approved -->` — confirming human approved the prior proposal
+  - `<!-- codex:status:escalated -->` — cannot proceed
   </output_format>
 
   <example>

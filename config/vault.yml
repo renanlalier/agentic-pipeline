@@ -1,0 +1,28 @@
+version: 1
+
+# Vault provider for the agentic pipeline runtime.
+# This file mirrors agentic-credentials/vault/config.yml — keep them in sync.
+# The authoritative copy for operators to edit is in agentic-credentials.
+#
+# Active provider. Change this field to switch backends globally.
+# Supported: azure-keyvault | aws-secrets-manager | hashicorp-vault
+provider: azure-keyvault
+
+# ─── Azure Key Vault ─────────────────────────────────────────────────────────
+# vault_url is read from the AZURE_VAULT_URL Actions variable at runtime.
+# Set it in Settings > Secrets and variables > Variables on each product repo
+# (or as an org-level variable for all repos).
+# Required Actions variables: AZURE_CLIENT_ID, AZURE_TENANT_ID,
+#   AZURE_SUBSCRIPTION_ID, AZURE_VAULT_URL
+azure-keyvault:
+  auth: oidc   # oidc | service-principal
+
+# ─── AWS Secrets Manager ─────────────────────────────────────────────────────
+# Not yet implemented. Set provider: aws-secrets-manager and fill region.
+aws-secrets-manager:
+  region: us-east-1
+
+# ─── HashiCorp Vault ─────────────────────────────────────────────────────────
+# Not yet implemented. Set VAULT_ADDR env var for the address.
+hashicorp-vault:
+  mount: secret

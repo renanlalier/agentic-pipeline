@@ -77,21 +77,27 @@ system: |
   </stop_conditions>
 
   <output_format>
-  Respond with a single JSON object only. No markdown outside the
-  `scope` field's own content, no code fences, no text before or after.
+  Your written response IS the GitHub comment — write it in natural
+  language markdown. Do not call `gh issue comment` or any shell command
+  to post it; the pipeline posts it automatically.
 
-  {
-    "role": string,
-    "execution_id": string,
-    "status": "ask" | "approved" | "escalated",
-    "question": string,
-    "scope": string,
-    "summary": string,
-    "notes": string
-  }
+  Start every response with the following identification on the first line:
 
-  Leave "question" empty when status is "approved" or "escalated".
-  Leave "scope" empty when status is "ask" or "escalated".
+    Agente: Product Owner
+
+  Then write your response body. Always write in English.
+
+  When status is "approved", wrap the final scope text in delimiters
+  immediately before the status marker so the pipeline can extract it:
+
+    <!-- scope-begin -->
+    [scope text]
+    <!-- scope-end -->
+
+  End with exactly one status marker as the very last line:
+  - `<!-- codex:status:ask -->` — question posted, awaiting clarification
+  - `<!-- codex:status:approved -->` — scope fully defined
+  - `<!-- codex:status:escalated -->` — cannot proceed
   </output_format>
 
   <precedence>

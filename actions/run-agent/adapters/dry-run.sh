@@ -30,8 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/skills.sh
 source "$SCRIPT_DIR/lib/skills.sh"
 
-_add_usage() {
-  jq '. + { token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }'
+_emit() {
+  local body="$1"
+  jq -n --arg body "$body" \
+    '{ body: $body, token_usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }'
 }
 
 echo "--- system used (sacred, not editable by the repo) ---" >&2
@@ -71,121 +73,121 @@ APPROVAL_REGEX='approved|looks good|can proceed|lgtm|ok to proceed'
 
 case "$ROLE" in
   po)
-    # Brainstorming loop (parent issue). See brainstorming skill.
     if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
       DEMANDA=$(echo "$PROMPT" | awk '/^## Original demand/{c=1;next} /^## Conversation/{c=0} c')
-      SCOPE="[dry-run mode — approximate scope, not real design judgment]
+      SCOPE_TEXT=$(echo "$DEMANDA" | sed '/^$/d')
+      BODY="Agente: Product Owner
 
-$(echo "$DEMANDA" | sed '/^$/d')"
+Aprovação detectada (dry-run — detecção textual, sem julgamento real).
 
-      jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg scope "$SCOPE" \
-        '{
-          role: $role, execution_id: $exec_id, status: "approved",
-          question: "", scope: $scope,
-          summary: "Approval detected in dry-run mode (textual detection, not real judgment)",
-          notes: "dry-run adapter: use cli cursor or codex for real brainstorming"
-        }' | _add_usage
+<!-- scope-begin -->
+${SCOPE_TEXT}
+<!-- scope-end -->
+
+<!-- codex:status:approved -->"
+      _emit "$BODY"
     else
       N_HUMANO=$(echo "$PROMPT" | grep -c '\[HUMAN\]' || true)
       if [ "$N_HUMANO" -eq 0 ]; then
-        QUESTION="[dry-run canned question] What exact behavior should change, from the perspective of the person using the system?"
+        QUESTION="[dry-run — pergunta enlatada] Qual comportamento exato deve mudar, do ponto de vista de quem usa o sistema?"
       else
-        QUESTION="[dry-run canned question] Are there any constraints or things that must NOT change (non-goals)? If nothing is open, comment 'approved'."
+        QUESTION="[dry-run — pergunta enlatada] Há restrições ou coisas que NÃO devem mudar (não-objetivos)? Se não houver nada pendente, comente 'approved'."
       fi
+      BODY="Agente: Product Owner
 
-      jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg question "$QUESTION" \
-        '{
-          role: $role, execution_id: $exec_id, status: "ask",
-          question: $question, scope: "",
-          summary: "Brainstorming turn in dry-run mode",
-          notes: "dry-run adapter: canned question, no real judgment without a model"
-        }' | _add_usage
+${QUESTION}
+
+> _dry-run adapter: pergunta enlatada, sem julgamento real sem modelo_
+
+<!-- codex:status:ask -->"
+      _emit "$BODY"
     fi
     ;;
 
   tech-lead)
-    REPOS_JSON="[]"
+    # Parse repo fingerprints from prompt to build a markdown table
+    TABLE_ROWS=""
     CURRENT_NAME=""
     while IFS= read -r line; do
       if [[ "$line" =~ ^\#\#\#\ (.+)$ ]]; then
         CURRENT_NAME="${BASH_REMATCH[1]}"
       elif [[ "$line" =~ ^suggested\ logical\ role:\ (.+)$ ]] && [ -n "$CURRENT_NAME" ]; then
         CURRENT_ROLE="${BASH_REMATCH[1]}"
-        REPOS_JSON=$(echo "$REPOS_JSON" | jq --arg n "$CURRENT_NAME" --arg r "$CURRENT_ROLE" \
-          '. + [{"name":$n,"role":$r,"reason":"dry-run mode: no model call, no real semantic judgment — conservative proposal includes all eligible repos from the fingerprint"}]')
+        TABLE_ROWS="${TABLE_ROWS}| \`${CURRENT_NAME}\` | \`${CURRENT_ROLE}\` | dry-run: proposta conservadora sem julgamento semântico | \`task\` |
+"
         CURRENT_NAME=""
       fi
     done <<< "$PROMPT"
 
-    N_FOUND=$(echo "$REPOS_JSON" | jq 'length')
+    N_FOUND=$(echo "$TABLE_ROWS" | grep -c '^\|' || true)
     echo "repos found in fingerprint (dry-run mode, no judgment): $N_FOUND" >&2
 
-    jq -n \
-      --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --argjson repos "$REPOS_JSON" --arg n_skills "$N_SKILLS" \
-      '{
-        role: $role, execution_id: $exec_id, status: "ok",
-        issue_type: "task",
-        summary: ("Conservative proposal in dry-run mode (" + ($repos | length | tostring) + " repo(s) from fingerprint, " + $n_skills + " skill(s) loaded by keyword)"),
-        repos: $repos, contract_ref: "v1",
-        notes: "dry-run adapter has no semantic judgment — run with a real CLI (cursor/codex) for a proposal that actually analyzes each repo fingerprint"
-      }' | _add_usage
+    BODY="Agente: Tech Lead
+
+Proposta conservadora em dry-run mode (${N_FOUND} repo(s) do fingerprint, ${N_SKILLS} skill(s) carregada(s) por keyword).
+
+> _dry-run adapter: sem julgamento semântico — use cursor ou codex para uma proposta real_
+
+## Scope proposed by the pipeline
+
+| Repo | Role | Reason | Type |
+|------|------|--------|------|
+${TABLE_ROWS}
+<!-- codex:status:ok -->"
+    _emit "$BODY"
     ;;
 
   frontend-engineer|backend-engineer)
     if echo "$PROMPT" | grep -q 'MODE: ITERATIVE_PLANNING'; then
-      # Technical planning loop (sub-issue). See writing-plans skill.
       if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
-        jq -n \
-          --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
-          '{
-            role: $role, execution_id: $exec_id, status: "approved",
-            kind: "", content: "",
-            notes: "dry-run adapter: approval detected by text, not real judgment"
-          }' | _add_usage
+        BODY="Agente: ${ROLE}
+
+Aprovação detectada (dry-run — detecção textual, sem julgamento real).
+
+<!-- codex:status:approved -->"
+        _emit "$BODY"
       else
         N_PIPE=$(echo "$PROMPT" | grep -c '\[PIPE\]' || true)
         if [ "$N_PIPE" -eq 0 ]; then
-          KIND="plan"
-          CONTENT="[dry-run canned plan]
-1. Map the main file this sub-issue affects in this repository.
-2. Implement the described change, following the existing pattern in the repo.
-3. Write/update a test covering the new behavior.
+          PLAN_CONTENT="[dry-run — plano enlatado]
 
-Approve by commenting 'approved', or ask a question first."
+1. Mapear o arquivo principal afetado por esta sub-issue neste repositório.
+2. Implementar a mudança descrita, seguindo o padrão existente no repo.
+3. Escrever/atualizar um teste cobrindo o novo comportamento.
+
+Aprove comentando 'approved', ou faça uma pergunta antes."
         else
-          KIND="question"
-          CONTENT="[dry-run canned question] Does the plan above cover enough, or is there an edge case missing? Comment 'approved' to proceed."
+          PLAN_CONTENT="[dry-run — pergunta enlatada] O plano acima cobre o suficiente, ou há algum caso de borda faltando? Comente 'approved' para prosseguir."
         fi
+        BODY="Agente: ${ROLE}
 
-        jq -n \
-          --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg kind "$KIND" --arg content "$CONTENT" \
-          '{
-            role: $role, execution_id: $exec_id, status: "ask",
-            kind: $kind, content: $content,
-            notes: "dry-run adapter: canned content, no real judgment without a model"
-          }' | _add_usage
+${PLAN_CONTENT}
+
+> _dry-run adapter: conteúdo enlatado, sem julgamento real sem modelo_
+
+<!-- codex:status:ask -->"
+        _emit "$BODY"
       fi
     else
-      # Implementation phase (after plan approved)
-      jq -n \
-        --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" --arg n_skills "$N_SKILLS" \
-        '{
-          role: $role, execution_id: $exec_id, status: "ok",
-          summary: ("Simulated implementation in dry-run mode (" + $n_skills + " skill(s) loaded by keyword)"),
-          changed_files: ["CHANGELOG-agentic.md"],
-          notes: "dry-run adapter: no model call was made"
-        }' | _add_usage
+      BODY="Agente: ${ROLE}
+
+**Status:** Concluído
+**Resumo:** Implementação simulada em dry-run mode (${N_SKILLS} skill(s) carregada(s) por keyword)
+**Arquivos alterados:** \`CHANGELOG-agentic.md\`
+
+> _dry-run adapter: nenhuma chamada de modelo foi feita_
+
+<!-- codex:status:ok -->"
+      _emit "$BODY"
     fi
     ;;
 
   *)
-    jq -n \
-      --arg role "$ROLE" --arg exec_id "$EXECUTION_ID" \
-      '{
-        role: $role, execution_id: $exec_id, status: "ok",
-        summary: "Role executed in dry-run mode"
-      }' | _add_usage
+    BODY="Agente: ${ROLE}
+
+Execução em dry-run mode concluída.
+
+<!-- codex:status:ok -->"
+    _emit "$BODY"
     ;;
 esac

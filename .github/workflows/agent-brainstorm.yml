@@ -142,21 +142,13 @@ jobs:
           ISSUE: ${{ inputs.issue_number }}
           EXEC_ID: ${{ inputs.execution_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENT_BODY: ${{ steps.agent.outputs.body }}
+          STATUS: ${{ steps.agent.outputs.status }}
         run: |
           set -euo pipefail
-          cat <<'RESULTEOF' > agent_result.json
-          ${{ steps.agent.outputs.result }}
-          RESULTEOF
 
-          echo "--- PO output ---"
-          cat agent_result.json
-
-          if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::PO agent output is not valid JSON."
-            exit 1
-          fi
-
-          STATUS=$(jq -r '.status' agent_result.json)
+          echo "--- PO output (status: $STATUS) ---"
+          printf '%s\n' "$AGENT_BODY"
 
           case "$STATUS" in
             dispatched_to_cloud)
@@ -168,9 +160,8 @@ jobs:
               ;;
 
             ask)
-              QUESTION=$(jq -r '.question' agent_result.json)
               {
-                echo "$QUESTION"
+                printf '%s\n' "$AGENT_BODY"
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: brainstorming_"
@@ -184,10 +175,10 @@ jobs:
               ;;
 
             approved)
-              SCOPE=$(jq -r '.scope' agent_result.json)
+              # Extract scope from <!-- scope-begin --> / <!-- scope-end --> delimiters.
+              SCOPE=$(printf '%s\n' "$AGENT_BODY" | sed -n '/<!-- scope-begin -->/,/<!-- scope-end -->/{ /<!-- scope-begin -->/d; /<!-- scope-end -->/d; p }')
 
-              # Replace ### Scope section idempotently (works whether or not the section
-              # exists already — the textarea field may be blank on first submission).
+              # Replace ### Scope section idempotently.
               CURRENT_BODY=$(jq -r '.body // ""' issue.json)
               BASE_BODY=$(printf '%s' "$CURRENT_BODY" | sed '/^### Scope$/,$d' | sed 's/[[:space:]]*$//')
               NEW_BODY="$(printf '%s\n\n### Scope\n\n%s' "$BASE_BODY" "$SCOPE")"
@@ -211,11 +202,8 @@ jobs:
               ;;
 
             escalated)
-              NOTES=$(jq -r '.notes' agent_result.json)
               {
-                echo "## PO escalated this demand"
-                echo ""
-                echo "$NOTES"
+                printf '%s\n' "$AGENT_BODY"
                 echo ""
                 echo "---"
                 echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)_"

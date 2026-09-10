@@ -148,9 +148,9 @@ jobs:
               echo ""
               echo "## Instruction"
               echo "The human has responded to the scope proposal above."
-              echo "- If the human is approving the proposal as-is (e.g. 'approved', 'ok', 'looks good'), set status to \"approved\"."
-              echo "- If the human is requesting changes or corrections, revise the scope and set status to \"revised\"."
-              echo "- If the situation requires escalation, set status to \"escalated\"."
+              echo "- If the human is approving the proposal as-is (e.g. 'approved', 'ok', 'looks good'), confirm with status approved."
+              echo "- If the human is requesting changes or corrections, write a revised proposal with the updated table and set status ok."
+              echo "- If the situation requires escalation, set status escalated."
               echo "Only explain repositories you are proposing as in-scope."
               echo "Do not list or comment on repositories that are excluded."
               echo "PROMPTEOF"
@@ -219,40 +219,6 @@ jobs:
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
 
-      - name: Interpret agent decision
-        id: decision
-        run: |
-          set -euo pipefail
-          cat <<'RESULTEOF' > agent_result.json
-          ${{ steps.agent.outputs.result }}
-          RESULTEOF
-
-          echo "--- agent output ---"
-          cat agent_result.json
-
-          if ! jq empty agent_result.json 2>/dev/null; then
-            echo "::error::Agent output is not valid JSON. See log above."
-            exit 1
-          fi
-
-          STATUS=$(jq -r '.status' agent_result.json)
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-
-          if [ "$STATUS" = "dispatched_to_cloud" ]; then
-            # Cloud mode: Codex is handling it; skip repo-count validation.
-            true
-          elif [ "$STATUS" = "escalated" ]; then
-            echo "::warning::Tech Lead escalated instead of proposing scope. This is the system.md stop_condition acting — not a bug."
-          elif [ "$STATUS" = "approved" ]; then
-            echo "Human approved the scope proposal."
-          else
-            N_REPOS=$(jq -r '.repos | length' agent_result.json)
-            if [ "$N_REPOS" -eq 0 ]; then
-              echo "::error::Agent returned status ok/revised but proposed no repositories. Treating as escalation."
-              echo "status=escalated" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
       - name: Publish scope proposal or handle approval on the issue
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -261,11 +227,14 @@ jobs:
           EXEC_ID: ${{ inputs.execution_id }}
           CLI: ${{ steps.agent.outputs.cli }}
           MODEL: ${{ steps.agent.outputs.model }}
-          STATUS: ${{ steps.decision.outputs.status }}
-          MODE: ${{ steps.mode.outputs.mode }}
+          STATUS: ${{ steps.agent.outputs.status }}
+          AGENT_BODY: ${{ steps.agent.outputs.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+
+          echo "--- Tech Lead output (status: $STATUS) ---"
+          printf '%s\n' "$AGENT_BODY"
 
           if [ "$STATUS" = "dispatched_to_cloud" ]; then
             gh api "repos/$REPO/issues/$ISSUE/labels" \
@@ -276,21 +245,11 @@ jobs:
           fi
 
           if [ "$STATUS" = "escalated" ]; then
-            SUMMARY=$(jq -r '.summary' agent_result.json)
-            NOTES=$(jq -r '.notes' agent_result.json)
             {
-              echo "## Tech Lead escalated this demand"
-              echo ""
-              echo "\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)"
-              echo ""
-              echo "**Summary:** $SUMMARY"
-              echo ""
-              echo "**Reason:** $NOTES"
+              printf '%s\n' "$AGENT_BODY"
               echo ""
               echo "---"
-              echo "No automatic stop condition failed here — the agent evaluated the"
-              echo "eligible repositories discovered from the organization and found no"
-              echo "safe match with sufficient judgment. Refine the demand and reopen."
+              echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL)_"
               echo "<!-- pipe:lead -->"
             } > comment.md
             jq -Rs '{body: .}' comment.md > payload.json
@@ -299,7 +258,6 @@ jobs:
           fi
 
           if [ "$STATUS" = "approved" ]; then
-            # Human approved the scope in a comment — apply label and confirm.
             gh api "repos/$REPO/issues/$ISSUE/labels" \
               -f "labels[]=scope-approved" >/dev/null
             gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/awaiting-scope-approval" >/dev/null 2>&1 || true
@@ -317,23 +275,15 @@ jobs:
             exit 0
           fi
 
-          # status == "ok" (initial proposal) or "revised" (iteration)
-          ISSUE_TYPE=$(jq -r '.issue_type // "task"' agent_result.json)
-
+          # status == "ok" (initial proposal or revised iteration)
+          # Agent already wrote the full proposal with "## Scope proposed by the pipeline" table.
           {
-            echo "## Scope proposed by the pipeline"
-            echo ""
-            echo "\`execution_id\`: \`$EXEC_ID\`"
-            echo "\`cli\`: \`$CLI\` · \`model\`: \`$MODEL\`"
-            echo "[run for this step]($RUN_URL)"
-            echo ""
-            echo "**Demand type:** \`$ISSUE_TYPE\`"
-            echo ""
-            echo "| repository | role | why included | type |"
-            echo "|---|---|---|---|"
-            jq -r --arg t "$ISSUE_TYPE" '.repos[] | "| `\(.name)` | `\(.role)` | \(.reason) | `\($t)` |"' agent_result.json
+            printf '%s\n' "$AGENT_BODY"
             echo ""
             echo "---"
+            echo "\`execution_id\`: \`$EXEC_ID\` · \`cli\`: \`$CLI\` · \`model\`: \`$MODEL\`"
+            echo "[run for this step]($RUN_URL)"
+            echo ""
             echo "**HITL 1 — scope approval.**"
             echo "Comment to approve or request changes. The pipeline will apply"
             echo "\`scope-approved\` automatically when you approve."

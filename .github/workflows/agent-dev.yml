@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: ""
+      secrets_source:
+        description: "Override secrets.source from .agentic/config.yml. 'github-secrets' | 'vault'"
+        required: false
+        type: string
+        default: ""
     secrets:
       ANTHROPIC_API_KEY:
         description: "Required when the resolved CLI is claude-code."
@@ -70,11 +75,15 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      id-token: write   # required for OIDC vault authentication when secrets_source: vault
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
       CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+      # Azure vault variables — set as Actions variables (not secrets) on the repo or org.
+      # Used when secrets_source resolves to 'vault'.
+      AZURE_VAULT_URL: ${{ vars.AZURE_VAULT_URL }}
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v5
@@ -94,6 +103,16 @@ jobs:
             https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      - name: Resolve secrets_source (level 3 → 2)
+        id: secrets_src
+        run: |
+          set -euo pipefail
+          SRC="${{ inputs.secrets_source }}"
+          [ -z "$SRC" ] && SRC=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$SRC" ] && SRC="github-secrets"
+          echo "secrets_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Secrets source resolved to: $SRC"
+
       - name: Preflight — provider key for the resolved CLI
         run: |
           set -euo pipefail
@@ -105,6 +124,15 @@ jobs:
           CLI="${{ inputs.cli_override }}"
           [ -z "$CLI" ] && CLI=$(yq -r '.defaults.cli // ""' .agentic/config.yml 2>/dev/null || echo "")
           [ -z "$CLI" ] && CLI="dry-run"
+
+          # When using vault, the key is fetched at runtime by run-agent — skip the
+          # presence check here. A missing or invalid vault secret fails later with
+          # a clear error from the vault provider.
+          SECRETS_SOURCE="${{ steps.secrets_src.outputs.secrets_source }}"
+          if [ "$SECRETS_SOURCE" = "vault" ]; then
+            echo "cli '$CLI' — secrets from vault, skipping GitHub Secrets presence check"
+            exit 0
+          fi
 
           case "$CLI" in
             claude-code) REQUIRED_KEY="ANTHROPIC_API_KEY" ;;
@@ -120,6 +148,14 @@ jobs:
           fi
 
           echo "cli '$CLI' — provider key: ${REQUIRED_KEY:-none required}"
+
+      - name: Azure login (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve execution_id (input or sub-issue label)
         id: exec
@@ -219,6 +255,7 @@ jobs:
           issue_number: ${{ inputs.sub_issue }}
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
+          secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
 
       - name: Apply cloud dispatch labels
         if: steps.mode.outputs.target == 'cloud'
