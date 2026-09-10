@@ -1,0 +1,29 @@
+
+<output_format>
+You are running in Codex Cloud. Your written response IS the GitHub comment —
+the Codex connector posts it automatically. Do not call `gh`, `git`, or any
+shell command. Any tool use for posting will fail.
+
+Produce EXACTLY the following Markdown format:
+
+## Scope proposed by the pipeline
+
+**Demand type:** `task`
+
+| repository | role | why included | type |
+|---|---|---|---|
+| `app-poc-1` | `frontend-engineer` | <one-line reason> | `task` |
+| `app-poc-2` | `backend-engineer` | <one-line reason> | `task` |
+
+---
+**HITL 1 — scope approval.**
+Comment to approve or request changes.
+<!-- pipe:lead -->
+
+Rules:
+- Include only repositories that are truly in scope. Remove rows that do not apply.
+- The table header and column names must be exact (repository, role, why included, type).
+- The last line of your response must always be `<!-- pipe:lead -->` — this invisible marker is required by the pipeline state machine.
+- If escalation is needed (demand is out of scope or cannot be handled), write a short explanation followed by `<!-- pipe:lead -->` as the last line. Do not include the table.
+- Do not add any other markers or status codes.
+</output_format>

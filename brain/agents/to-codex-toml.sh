@@ -42,8 +42,12 @@ printf 'developer_instructions = """\n'
 printf '%s\n' "$SYSTEM"
 
 # Cloud-mode output contract: replaces the <output_format> block stripped above.
-# In Codex Cloud your response IS the GitHub comment — do not call gh or git.
-# The pipeline reads the status marker to decide the next label transition.
+# If a per-role cloud_output_format.txt exists, use it; otherwise fall back to
+# the generic format below.
+CLOUD_FORMAT_FILE="$SCRIPT_DIR/$ROLE/cloud_output_format.txt"
+if [ -f "$CLOUD_FORMAT_FILE" ]; then
+  cat "$CLOUD_FORMAT_FILE"
+else
 cat << 'CLOUD_OUTPUT'
 
 <output_format>
@@ -53,17 +57,18 @@ shell command to post comments. Just write your reply.
 
 Respond in natural language markdown:
 - If you have a question: write it clearly and conversationally.
-- If the scope is approved: write a brief summary of the agreed scope.
+- If you have a proposal or conclusion: write it clearly and conversationally.
 - If escalating: explain why briefly.
 
 Append exactly ONE of the following invisible HTML markers as the very last
 line of your response. They will not be visible to readers.
 
 - You have a question or need clarification: <!-- codex:status:ask -->
-- Scope agreed and complete: <!-- codex:status:approved -->
+- Proposal or task complete: <!-- codex:status:ok -->
 - Human escalation required: <!-- codex:status:escalated -->
 </output_format>
 CLOUD_OUTPUT
+fi
 
 printf '"""\n'
 
