@@ -29,12 +29,16 @@ Before the first question, classify the demand mentally:
 - **Architectural** — a decision that shapes multiple repositories or
   changes a contract between them. Deserves more rounds before closing.
 
-## One question per turn
+## Ask all open questions upfront, in one turn
 
-Never accumulate a list of questions in a single comment. Ask the
-single most important thing still open. This is slower in number of
-turns, but each human response is easier to give — and you learn from
-each answer before deciding the next question.
+Before asking anything, reason through the full demand and identify
+every open point that could change what gets built. Then ask all of
+them in a single, well-structured message — number each question so
+the human can answer each one clearly.
+
+Never split questions across turns. One turn covers all ambiguities,
+even if there are several. This minimises back-and-forth for the human
+while ensuring nothing is missed before the scope is written.
 
 ## Presenting the scope
 

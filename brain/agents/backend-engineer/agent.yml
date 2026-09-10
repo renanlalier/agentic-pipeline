@@ -1,4 +1,5 @@
 name: backend-engineer
+display_name: "Backend Engineer"
 description: >
   Backend Engineer — implements the sub-issue assigned to this repository,
   applying expand/contract for any public contract change, with tests and a

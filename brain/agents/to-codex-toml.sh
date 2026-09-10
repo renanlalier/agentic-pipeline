@@ -23,6 +23,8 @@ if [ ! -f "$AGENT_YML" ]; then
 fi
 
 NAME=$(yq '.name' "$AGENT_YML")
+DISPLAY_NAME=$(yq '.display_name // ""' "$AGENT_YML")
+[ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="$NAME"
 # Folded YAML scalar '>': yq returns the value with a trailing newline; strip it.
 DESC=$(yq '.description' "$AGENT_YML" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
@@ -40,6 +42,22 @@ printf 'description = "%s"\n\n' "$DESC"
 # Triple-quoted TOML strings allow newlines and all characters except """.
 printf 'developer_instructions = """\n'
 printf '%s\n' "$SYSTEM"
+
+# Inline cloud_skills listed in agent.yml.
+# Local adapters load skills dynamically; Codex Cloud only sees developer_instructions,
+# so we embed the full SKILL.md content here.
+SKILLS_DIR="$SCRIPT_DIR/../skills"
+while IFS= read -r skill_name; do
+  [ -z "$skill_name" ] && continue
+  SKILL_FILE="$SKILLS_DIR/$skill_name/SKILL.md"
+  if [ -f "$SKILL_FILE" ]; then
+    printf '\n'
+    cat "$SKILL_FILE"
+    printf '\n'
+  else
+    printf '::warning::cloud_skill "%s" not found: %s\n' "$skill_name" "$SKILL_FILE" >&2
+  fi
+done < <(yq '.cloud_skills[]' "$AGENT_YML" 2>/dev/null || true)
 
 # Cloud-mode output contract: replaces the <output_format> block stripped above.
 # If a per-role cloud_output_format.txt exists, use it; otherwise fall back to
@@ -61,7 +79,7 @@ used in the issue or comments. This is a hard requirement.
 Start every response with the following identification field as the very first line:
 
 CLOUD_STATIC_BEFORE
-printf '  Agente: %s\n\n' "$NAME"
+printf '  Agente: %s\n\n' "$DISPLAY_NAME"
 cat << 'CLOUD_STATIC_AFTER'
 Then write your response body in natural language markdown:
 - If you have a question: write it clearly and conversationally.

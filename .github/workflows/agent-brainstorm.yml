@@ -101,10 +101,11 @@ jobs:
             fi
             echo ""
             echo "## Instruction"
-            echo "Apply the brainstorming skill. If clarity is still missing, ask"
-            echo "ONE question. If the last HUMAN comment approved a scope that"
-            echo "you yourself presented in a prior [PIPE] turn, conclude with"
-            echo "status approved and fill the scope field."
+            echo "Apply the brainstorming skill. Identify ALL open questions"
+            echo "upfront and ask them in a single, well-structured message —"
+            echo "never split questions across turns. If the last HUMAN comment"
+            echo "approved a scope that you yourself presented in a prior [PIPE]"
+            echo "turn, conclude with status approved and fill the scope field."
             echo "PROMPTEOF"
           } >> "$GITHUB_OUTPUT"
 

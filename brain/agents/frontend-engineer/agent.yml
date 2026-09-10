@@ -1,4 +1,5 @@
 name: frontend-engineer
+display_name: "Frontend Engineer"
 description: >
   Frontend Engineer — implements the sub-issue assigned to this repository,
   following its existing stack and conventions, with tests and a draft PR.
