@@ -76,7 +76,7 @@ case "$ROLE" in
     if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
       DEMANDA=$(echo "$PROMPT" | awk '/^## Original demand/{c=1;next} /^## Conversation/{c=0} c')
       SCOPE_TEXT=$(echo "$DEMANDA" | sed '/^$/d')
-      BODY="Agente: Product Owner
+      BODY="Agent: Product Owner
 
 Aprovação detectada (dry-run — detecção textual, sem julgamento real).
 
@@ -93,7 +93,7 @@ ${SCOPE_TEXT}
       else
         QUESTION="[dry-run — pergunta enlatada] Há restrições ou coisas que NÃO devem mudar (não-objetivos)? Se não houver nada pendente, comente 'approved'."
       fi
-      BODY="Agente: Product Owner
+      BODY="Agent: Product Owner
 
 ${QUESTION}
 
@@ -122,7 +122,7 @@ ${QUESTION}
     N_FOUND=$(echo "$TABLE_ROWS" | grep -c '^\|' || true)
     echo "repos found in fingerprint (dry-run mode, no judgment): $N_FOUND" >&2
 
-    BODY="Agente: Tech Lead
+    BODY="Agent: Tech Lead
 
 Proposta conservadora em dry-run mode (${N_FOUND} repo(s) do fingerprint, ${N_SKILLS} skill(s) carregada(s) por keyword).
 
@@ -140,7 +140,7 @@ ${TABLE_ROWS}
   frontend-engineer|backend-engineer)
     if echo "$PROMPT" | grep -q 'MODE: ITERATIVE_PLANNING'; then
       if echo "$PROMPT_NORM" | grep -qE "$APPROVAL_REGEX"; then
-        BODY="Agente: ${ROLE}
+        BODY="Agent: ${ROLE}
 
 Aprovação detectada (dry-run — detecção textual, sem julgamento real).
 
@@ -159,7 +159,7 @@ Aprove comentando 'approved', ou faça uma pergunta antes."
         else
           PLAN_CONTENT="[dry-run — pergunta enlatada] O plano acima cobre o suficiente, ou há algum caso de borda faltando? Comente 'approved' para prosseguir."
         fi
-        BODY="Agente: ${ROLE}
+        BODY="Agent: ${ROLE}
 
 ${PLAN_CONTENT}
 
@@ -169,7 +169,7 @@ ${PLAN_CONTENT}
         _emit "$BODY"
       fi
     else
-      BODY="Agente: ${ROLE}
+      BODY="Agent: ${ROLE}
 
 **Status:** Concluído
 **Resumo:** Implementação simulada em dry-run mode (${N_SKILLS} skill(s) carregada(s) por keyword)
@@ -183,7 +183,7 @@ ${PLAN_CONTENT}
     ;;
 
   *)
-    BODY="Agente: ${ROLE}
+    BODY="Agent: ${ROLE}
 
 Execução em dry-run mode concluída.
 
