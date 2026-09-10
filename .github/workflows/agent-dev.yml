@@ -175,6 +175,17 @@ jobs:
             exit 1
           fi
           REQUESTER=$(grep '^requester:' subissue_labels.txt | sed 's/^requester://' | head -1 || true)
+          # Fallback for sub-issues created before the requester: label was added.
+          if [ -z "$REQUESTER" ]; then
+            ORIGIN_LINE=$(gh api "repos/$REPO/issues/$SUB_ISSUE" --jq '.body // ""' 2>/dev/null \
+              | grep '^\*\*Origin:\*\*' | head -1 || true)
+            if [ -n "$ORIGIN_LINE" ]; then
+              PARENT_REF=$(echo "$ORIGIN_LINE" | sed 's/.*\*\*Origin:\*\* *//')
+              PARENT_REPO=$(echo "$PARENT_REF" | cut -d'#' -f1)
+              PARENT_NUM=$(echo "$PARENT_REF" | cut -d'#' -f2)
+              REQUESTER=$(gh api "repos/$PARENT_REPO/issues/$PARENT_NUM" --jq '.user.login' 2>/dev/null || true)
+            fi
+          fi
           echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
           echo "requester=$REQUESTER"  >> "$GITHUB_OUTPUT"
 

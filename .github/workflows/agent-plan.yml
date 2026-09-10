@@ -131,6 +131,17 @@ jobs:
           gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
           REQUESTER=$(jq -r '.labels[].name' subissue.json \
             | grep '^requester:' | sed 's/^requester://' | head -1 || true)
+          # Fallback for sub-issues created before the requester: label was added:
+          # extract the parent issue reference from the body and fetch its author.
+          if [ -z "$REQUESTER" ]; then
+            ORIGIN_LINE=$(jq -r '.body // ""' subissue.json | grep '^\*\*Origin:\*\*' | head -1 || true)
+            if [ -n "$ORIGIN_LINE" ]; then
+              PARENT_REF=$(echo "$ORIGIN_LINE" | sed 's/.*\*\*Origin:\*\* *//')
+              PARENT_REPO=$(echo "$PARENT_REF" | cut -d'#' -f1)
+              PARENT_NUM=$(echo "$PARENT_REF" | cut -d'#' -f2)
+              REQUESTER=$(gh api "repos/$PARENT_REPO/issues/$PARENT_NUM" --jq '.user.login' 2>/dev/null || true)
+            fi
+          fi
           echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
           TITLE=$(jq -r '.title' subissue.json)
           BODY=$(jq -r '.body // ""' subissue.json)
