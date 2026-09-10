@@ -24,7 +24,7 @@ on:
     inputs:
       sub_issue:
         required: true
-        type: number
+        type: string
       role:
         required: true
         type: string

@@ -24,7 +24,7 @@ on:
         type: string
       sub_issue:
         required: true
-        type: number
+        type: string
       execution_id:
         required: false
         type: string
