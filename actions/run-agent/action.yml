@@ -119,10 +119,19 @@ runs:
         PLATFORM_BASE_URL=$(yq -r '.gateway.base_url // ""' "$PLAT/config/allowlist.yml")
         BASE_URL="${REPO_BASE_URL:-$PLATFORM_BASE_URL}"
 
-        echo "cli=$CLI"                       >> "$GITHUB_OUTPUT"
-        echo "model=$MODEL"                   >> "$GITHUB_OUTPUT"
-        echo "base_url=$BASE_URL"             >> "$GITHUB_OUTPUT"
-        echo "execution_target=$EXEC_TARGET"  >> "$GITHUB_OUTPUT"
+        # secrets_source: level 3 (input) > level 2 (.agentic/config.yml) > default github-secrets
+        SECRETS_SOURCE="${{ inputs.secrets_source }}"
+        if [ "$SECRETS_SOURCE" = "github-secrets" ] || [ -z "$SECRETS_SOURCE" ]; then
+          SECRETS_SOURCE_L2=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -n "$SECRETS_SOURCE_L2" ] && SECRETS_SOURCE="$SECRETS_SOURCE_L2"
+        fi
+        [ -z "$SECRETS_SOURCE" ] && SECRETS_SOURCE="github-secrets"
+
+        echo "cli=$CLI"                             >> "$GITHUB_OUTPUT"
+        echo "model=$MODEL"                         >> "$GITHUB_OUTPUT"
+        echo "base_url=$BASE_URL"                   >> "$GITHUB_OUTPUT"
+        echo "execution_target=$EXEC_TARGET"        >> "$GITHUB_OUTPUT"
+        echo "secrets_source=$SECRETS_SOURCE"       >> "$GITHUB_OUTPUT"
 
         echo "### run-agent" >> "$GITHUB_STEP_SUMMARY"
         echo "| field | value |" >> "$GITHUB_STEP_SUMMARY"
@@ -241,7 +250,7 @@ runs:
         echo "x-repo: ${{ github.repository }}"
 
     - name: Fetch secrets from vault
-      if: inputs.secrets_source == 'vault'
+      if: steps.resolve.outputs.secrets_source == 'vault'
       shell: bash
       env:
         CLI: ${{ steps.resolve.outputs.cli }}

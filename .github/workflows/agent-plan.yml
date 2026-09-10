@@ -52,6 +52,10 @@ on:
         required: false
         type: string
         default: ""
+      secrets_source:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   plan:
@@ -68,6 +72,32 @@ jobs:
           repository: renanlalier/agentic-pipeline
           ref: v1
           path: .platform
+
+      - name: Install yq
+        run: |
+          if ! command -v yq &>/dev/null; then
+            sudo wget -qO /usr/local/bin/yq \
+              https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+            sudo chmod +x /usr/local/bin/yq
+          fi
+
+      - name: Resolve secrets_source (level 3 → 2)
+        id: secrets_src
+        run: |
+          set -euo pipefail
+          SRC="${{ inputs.secrets_source }}"
+          [ -z "$SRC" ] && SRC=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$SRC" ] && SRC="github-secrets"
+          echo "secrets_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Secrets source resolved to: $SRC"
+
+      - name: Azure login (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve execution_id (input or sub-issue label)
         id: exec
@@ -98,6 +128,8 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
+          REQUESTER=$(jq -r '.user.login // ""' subissue.json)
+          echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
           TITLE=$(jq -r '.title' subissue.json)
           BODY=$(jq -r '.body // ""' subissue.json)
 
@@ -159,6 +191,8 @@ jobs:
           issue_number: ${{ inputs.sub_issue }}
           repo_full_name: ${{ github.repository }}
           github_token: ${{ inputs.github_token != '' && inputs.github_token || github.token }}
+          requester: ${{ steps.context.outputs.requester }}
+          secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
 
       - name: Act on agent decision
         env:
