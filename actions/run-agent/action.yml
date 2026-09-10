@@ -111,9 +111,13 @@ runs:
           exit 1
         fi
 
-        # base_url: level 2 from .agentic/config.yml; level 3 override is
-        # ANTHROPIC_BASE_URL set directly in the job env (not captured here).
-        BASE_URL=$(yq -r '.defaults.base_url // ""' .agentic/config.yml 2>/dev/null || echo "")
+        # base_url resolution — three levels:
+        # 3 (job):      ANTHROPIC_BASE_URL set directly in the job env (not captured here — claude-code.sh wins)
+        # 2 (repo):     .agentic/config.yml → defaults.base_url
+        # 1 (platform): config/allowlist.yml → gateway.base_url  (default for all repos)
+        REPO_BASE_URL=$(yq -r '.defaults.base_url // ""' .agentic/config.yml 2>/dev/null || echo "")
+        PLATFORM_BASE_URL=$(yq -r '.gateway.base_url // ""' "$PLAT/config/allowlist.yml")
+        BASE_URL="${REPO_BASE_URL:-$PLATFORM_BASE_URL}"
 
         echo "cli=$CLI"                       >> "$GITHUB_OUTPUT"
         echo "model=$MODEL"                   >> "$GITHUB_OUTPUT"

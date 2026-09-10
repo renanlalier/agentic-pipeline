@@ -44,7 +44,8 @@ budgets:
   max_retries_per_role: 2
 
 gateway:
-  enabled: false
+  enabled: true
+  base_url: https://flow.ciandt.com/flow-litellm/
   required_headers:
     - execution-id
     - run-id
