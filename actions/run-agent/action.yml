@@ -255,8 +255,9 @@ runs:
       env:
         CLI: ${{ steps.resolve.outputs.cli }}
         PLAT: ${{ inputs.platform_path }}
-        AZURE_VAULT_URL: ${{ env.AZURE_VAULT_URL }}
+        AZURE_VAULT_URL: ${{ vars.AZURE_VAULT_URL }}
         VAULT_CONFIG_FILE: ${{ inputs.platform_path }}/config/vault.yml
+        REQUESTER_INPUT: ${{ inputs.requester }}
       run: |
         set -euo pipefail
 
@@ -281,7 +282,9 @@ runs:
 
         # Per-user isolation: append the requester's GitHub username.
         # Secrets are stored as e.g. ANTHROPIC-API-KEY--renanlalier
-        REQUESTER="${{ inputs.requester }}"
+        # Read from env var (not ${{ }}) to prevent shell injection if the value
+        # is malformed (e.g. a raw JSON error response from a failed gh api call).
+        REQUESTER="$REQUESTER_INPUT"
         if [ -z "$REQUESTER" ]; then
           echo "::error::requester input is empty. The calling workflow must pass the issue author's GitHub username."
           exit 1

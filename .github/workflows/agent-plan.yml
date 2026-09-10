@@ -139,7 +139,9 @@ jobs:
               PARENT_REF=$(echo "$ORIGIN_LINE" | sed 's/.*\*\*Origin:\*\* *//')
               PARENT_REPO=$(echo "$PARENT_REF" | cut -d'#' -f1)
               PARENT_NUM=$(echo "$PARENT_REF" | cut -d'#' -f2)
-              REQUESTER=$(gh api "repos/$PARENT_REPO/issues/$PARENT_NUM" --jq '.user.login' 2>/dev/null || true)
+              REQUESTER=$(gh api "repos/$PARENT_REPO/issues/$PARENT_NUM" --jq '.user.login // empty' 2>/dev/null || true)
+              # Discard if gh api returned a JSON error body instead of a plain username.
+              [[ "$REQUESTER" == *"{"* ]] && REQUESTER=""
             fi
           fi
           echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
