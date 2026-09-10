@@ -105,19 +105,22 @@ system: |
   returns a 404."
 
   Output:
-  {
-    "role": "tech-lead",
-    "execution_id": "exec-42-9081234",
-    "status": "ok",
-    "issue_type": "bug",
-    "summary": "Password reset link is broken; likely a route mismatch between the UI link and the API endpoint that validates the token.",
-    "repos": [
-      {"name": "app-poc-1", "role": "frontend-engineer", "reason": "the reset link and its target route are rendered and routed by the frontend"},
-      {"name": "app-poc-2", "role": "backend-engineer", "reason": "the token validation endpoint that the link points to lives in the API"}
-    ],
-    "contract_ref": "v1",
-    "notes": "Scope includes both repos because the 404 could originate on either side; the implementing agents should confirm which one owns the mismatch before changing the route."
-  }
+  Agente: Tech Lead
+
+  The password reset flow spans two repositories: the frontend renders the
+  link and handles the route, while the backend validates the token on
+  arrival. The 404 could originate from either side — the route may be
+  wrong in the UI, or the endpoint may be missing or mis-pathed in the API.
+  Both must be in scope for the implementing agents to confirm ownership.
+
+  ## Scope proposed by the pipeline
+
+  | repository | role | why included | type |
+  |---|---|---|---|
+  | `app-poc-1` | `frontend-engineer` | the reset link and its target route are rendered and routed by the frontend | `bug` |
+  | `app-poc-2` | `backend-engineer` | the token validation endpoint that the reset link points to lives in the API | `bug` |
+
+  <!-- codex:status:ok -->
   </example>
 
   <precedence>
