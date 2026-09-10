@@ -48,26 +48,24 @@ CLOUD_FORMAT_FILE="$SCRIPT_DIR/$ROLE/cloud_output_format.txt"
 if [ -f "$CLOUD_FORMAT_FILE" ]; then
   cat "$CLOUD_FORMAT_FILE"
 else
-cat << 'CLOUD_OUTPUT'
-
-<output_format>
-You are running in Codex Cloud. Your response will be posted automatically as
-a GitHub comment by the Codex connector — do NOT call `gh`, `git`, or any
-shell command to post comments. Just write your reply.
-
-Respond in natural language markdown:
-- If you have a question: write it clearly and conversationally.
-- If you have a proposal or conclusion: write it clearly and conversationally.
-- If escalating: explain why briefly.
-
-Append exactly ONE of the following invisible HTML markers as the very last
-line of your response. They will not be visible to readers.
-
-- You have a question or need clarification: <!-- codex:status:ask -->
-- Proposal or task complete: <!-- codex:status:ok -->
-- Human escalation required: <!-- codex:status:escalated -->
-</output_format>
-CLOUD_OUTPUT
+printf '\n<output_format>\n'
+printf 'You are running in Codex Cloud. Your response will be posted automatically as\n'
+printf 'a GitHub comment by the Codex connector — do NOT call `gh`, `git`, or any\n'
+printf 'shell command to post comments. Just write your reply.\n\n'
+printf 'IMPORTANT: Always write your response in English, regardless of the language\n'
+printf 'used in the issue or comments. This is a hard requirement.\n\n'
+printf 'Start every response with the following identification field as the very first line:\n\n'
+printf '  Agente: %s\n\n' "$NAME"
+printf 'Then write your response body in natural language markdown:\n'
+printf '- If you have a question: write it clearly and conversationally.\n'
+printf '- If you have a proposal or conclusion: write it clearly and conversationally.\n'
+printf '- If escalating: explain why briefly.\n\n'
+printf 'Append exactly ONE of the following invisible HTML markers as the very last\n'
+printf 'line of your response. They will not be visible to readers.\n\n'
+printf '- You have a question or need clarification: <!-- codex:status:ask -->\n'
+printf '- Proposal or task complete: <!-- codex:status:ok -->\n'
+printf '- Human escalation required: <!-- codex:status:escalated -->\n'
+printf '</output_format>\n'
 fi
 
 printf '"""\n'
