@@ -251,6 +251,9 @@ jobs:
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
+              # Remove plan-approved before re-applying so that the labeled event always fires,
+              # even when a previous review already applied the label (duplicate label = no event).
+              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/plan-approved" >/dev/null 2>&1 || true
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
                 -f "labels[]=plan-approved" >/dev/null
               gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/plan-review-requested" >/dev/null 2>&1 || true
