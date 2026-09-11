@@ -241,10 +241,17 @@ jobs:
               jq -Rs '{body: .}' comment.md > payload.json
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
+              # Apply label for visibility (GITHUB_TOKEN cannot trigger labeled events in other workflows)
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
                 -f "labels[]=plan-review-requested" >/dev/null
               gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/planning" >/dev/null 2>&1 || true
-              echo "Plan posted — plan-review-requested label applied. Tech Lead will review automatically."
+
+              # Send repository_dispatch to trigger on-plan-review (GITHUB_TOKEN CAN trigger repository_dispatch)
+              gh api "repos/$REPO/dispatches" \
+                -f event_type=agent-plan-review \
+                -f "client_payload[sub_issue]=$SUB_ISSUE" \
+                -f "client_payload[execution_id]=$EXEC_ID"
+              echo "Plan posted — plan-review-requested label applied. Tech Lead review dispatched."
               ;;
 
             escalated)
