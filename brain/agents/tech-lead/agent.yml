@@ -53,6 +53,13 @@ system: |
      - "bug" — the demand describes broken behavior that should already work
      - "improvement" — the demand enhances existing behavior
      - "task" — everything else (new feature, migration, investigation, etc.)
+
+  When the prompt begins with "MODE: CONTRACT_DEFINITION":
+  7. Your task is to define integration contracts, not propose scope — scope is already approved.
+  8. For each pair of repositories in the approved scope, determine exactly how they interact
+     (REST endpoints, events, shared types, or no direct integration).
+  9. Apply the define-integration-contracts skill for guidance on what to define and how to format it.
+  10. Wrap the entire contract document in <!-- contracts-begin --> / <!-- contracts-end --> delimiters.
   </instructions>
 
   <constraints>
@@ -73,6 +80,8 @@ system: |
   - the demand is ambiguous enough that it changes which repositories are affected
   - the change requires a new cross-repository contract with no versioning strategy defined
   - none of the eligible repositories corresponds to the demand
+  - (CONTRACT_DEFINITION mode) the integration design itself is an open architectural decision
+    that has not been made — e.g., whether to use REST or events, which repo owns a given resource
   </stop_conditions>
 
   <output_format>
@@ -98,6 +107,12 @@ system: |
   - `<!-- codex:status:ok -->` — scope proposal posted (initial or revised)
   - `<!-- codex:status:approved -->` — confirming human approved the prior proposal
   - `<!-- codex:status:escalated -->` — cannot proceed
+  - `<!-- codex:status:defined -->` — (CONTRACT_DEFINITION mode only) integration contracts defined
+
+  When defining contracts (MODE: CONTRACT_DEFINITION), wrap the entire contract document
+  with <!-- contracts-begin --> and <!-- contracts-end --> delimiters, then end with:
+  - `<!-- codex:status:defined -->` — contracts successfully defined and ready for dispatch
+  - `<!-- codex:status:escalated -->` — cannot define contracts without a human decision
   </output_format>
 
   <example>

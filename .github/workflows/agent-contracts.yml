@@ -1,0 +1,255 @@
+name: agent-contracts (reusable)
+
+# Step 3a of the flow, AFTER HITL 1 (scope-approved) and BEFORE dispatch.
+# Runs in the INTAKE repo.
+#
+# The scope has been approved by a human — which repos are involved and why.
+# This workflow calls the Tech Lead in CONTRACT_DEFINITION mode to define the
+# integration contracts between those repositories (API endpoints, shared types,
+# events, versioning). Contracts are posted as a comment delimited by
+# <!-- contracts-begin --> / <!-- contracts-end --> and the contracts-defined
+# label is applied, which then triggers agent-dispatch.
+#
+# NOTE: issue text is never interpolated with ${{ }} directly inside a run block.
+# It always travels through a file or an environment variable.
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      execution_id:
+        required: true
+        type: string
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
+      secrets_source:
+        description: "Override secrets.source from .agentic/config.yml. 'github-secrets' | 'vault'"
+        required: false
+        type: string
+        default: ""
+      requester:
+        description: "GitHub username of the demand author. Used to look up per-user credentials in the vault."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      APP_ID:
+        required: true
+        description: "GitHub App ID for generating a scoped installation token"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (PEM) for generating a scoped installation token"
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      CURSOR_API_KEY:
+        required: false
+      CONTEXT7_API_KEY:
+        required: false
+
+jobs:
+  define-contracts:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+      id-token: write
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+      AZURE_VAULT_URL: ${{ vars.AZURE_VAULT_URL }}
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v5
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout platform
+        uses: actions/checkout@v5
+        with:
+          repository: renanlalier/agentic-pipeline
+          ref: v1
+          path: .platform
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Resolve secrets_source (level 3 → 2)
+        id: secrets_src
+        run: |
+          set -euo pipefail
+          SRC="${{ inputs.secrets_source }}"
+          [ -z "$SRC" ] && SRC=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$SRC" ] && SRC="github-secrets"
+          echo "secrets_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Secrets source resolved to: $SRC"
+
+      - name: Azure login (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read the issue
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$ISSUE" > issue.json
+          jq -r '.title + "\n" + (.body // "")' issue.json > issue.txt
+          echo "--- issue content read ---"
+          cat issue.txt
+
+      - name: Recover approved scope
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/$REPO/issues/$ISSUE/comments" \
+            --jq '[.[] | select(.body | contains("Scope proposed by the pipeline"))] | last | .body // ""' \
+            > scope.md
+
+          if [ ! -s scope.md ]; then
+            echo "::error::Could not find an approved scope proposal comment on issue #$ISSUE."
+            exit 1
+          fi
+
+          echo "--- approved scope recovered ---"
+          cat scope.md
+
+      - name: Build contract-definition prompt
+        id: context
+        env:
+          EXEC_ID: ${{ inputs.execution_id }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "prompt<<PROMPTEOF"
+            echo "MODE: CONTRACT_DEFINITION"
+            echo ""
+            echo "The scope below has been approved by a human. Your task is NOT to re-propose scope."
+            echo "Your task is to define the integration contracts between the listed repositories"
+            echo "before any sub-issue is created, so that each engineer can implement their side"
+            echo "independently and without ambiguity."
+            echo ""
+            echo "Apply the define-integration-contracts skill."
+            echo ""
+            echo "## Demand"
+            cat issue.txt
+            echo ""
+            echo "## Approved scope"
+            cat scope.md
+            echo ""
+            echo "Execution ID: $EXEC_ID"
+            echo "PROMPTEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Execute tech-lead role
+        id: agent
+        uses: ./.platform/actions/run-agent
+        with:
+          role: tech-lead
+          cli_override: ${{ inputs.cli_override }}
+          model_override: ${{ inputs.model_override }}
+          execution_id: ${{ inputs.execution_id }}
+          prompt: ${{ steps.context.outputs.prompt }}
+          platform_path: .platform
+          execution_target: ${{ inputs.execution_target }}
+          issue_number: ${{ inputs.issue_number }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
+          secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
+          requester: ${{ inputs.requester }}
+
+      - name: Publish contracts or handle escalation
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue_number }}
+          EXEC_ID: ${{ inputs.execution_id }}
+          CLI: ${{ steps.agent.outputs.cli }}
+          MODEL: ${{ steps.agent.outputs.model }}
+          STATUS: ${{ steps.agent.outputs.status }}
+          AGENT_BODY: ${{ steps.agent.outputs.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          echo "--- Tech Lead output (status: $STATUS) ---"
+          printf '%s\n' "$AGENT_BODY"
+
+          if [ "$STATUS" = "dispatched_to_cloud" ]; then
+            gh api "repos/$REPO/issues/$ISSUE/labels" \
+              -f "labels[]=awaiting-agent-response" >/dev/null
+            echo "Dispatched to Codex Cloud — waiting for tech-lead bot response on issue #$ISSUE."
+            exit 0
+          fi
+
+          if [ "$STATUS" = "escalated" ]; then
+            {
+              printf '%s\n' "$AGENT_BODY"
+              echo ""
+              echo "---"
+              echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: contract definition_"
+              echo "<!-- pipe:contracts -->"
+            } > comment.md
+            jq -Rs '{body: .}' comment.md > payload.json
+            gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+            exit 1
+          fi
+
+          # status == "defined" — post the contracts comment and apply the label
+          {
+            printf '%s\n' "$AGENT_BODY"
+            echo ""
+            echo "---"
+            echo "\`execution_id\`: \`$EXEC_ID\` · \`cli\`: \`$CLI\` · \`model\`: \`$MODEL\`"
+            echo "[run for this step]($RUN_URL)"
+            echo "<!-- pipe:contracts -->"
+          } > comment.md
+
+          cat comment.md
+
+          jq -Rs '{body: .}' comment.md > payload.json
+          gh api "repos/$REPO/issues/$ISSUE/comments" --input payload.json
+
+          gh api "repos/$REPO/issues/$ISSUE/labels" \
+            -f "labels[]=contracts-defined" >/dev/null
+
+          echo "contracts-defined label applied — dispatch will fire shortly."

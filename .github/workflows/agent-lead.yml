@@ -314,7 +314,7 @@ jobs:
             gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/awaiting-scope-approval" >/dev/null 2>&1 || true
 
             {
-              echo "**Scope approved.** Proceeding to fan-out — sub-issues will be created shortly."
+              echo "**Scope approved.** Proceeding to integration contract definition — sub-issues will be created once contracts are defined."
               echo ""
               echo "---"
               echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: scope approved_"

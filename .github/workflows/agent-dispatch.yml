@@ -52,7 +52,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Recover the approved scope
+      - name: Recover the approved scope and integration contracts
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -77,6 +77,17 @@ jobs:
           fi
 
           echo "--- approved scope ---"; cat scope.txt
+
+          # Recover integration contracts from the last contracts comment
+          gh api "repos/$REPO/issues/$ISSUE/comments" \
+            --jq '[.[] | select(.body | contains("contracts-begin"))] | last | .body // ""' \
+            > contracts_raw.md
+
+          awk '/<!-- contracts-begin -->/{found=1; next} /<!-- contracts-end -->/{found=0} found' \
+            contracts_raw.md > contracts.md
+
+          echo "--- integration contracts ---"
+          if [ -s contracts.md ]; then cat contracts.md; else echo "(none)"; fi
 
       - name: Create cross-repo sub-issues and dispatch planning
         env:
@@ -118,6 +129,14 @@ jobs:
               echo ""
               echo "_(Filled automatically by the pipeline after plan approval — do not edit manually."
               echo "Comment below to participate in planning refinement.)_"
+              echo ""
+              echo "## Integration Contracts"
+              echo ""
+              if [ -s contracts.md ]; then
+                cat contracts.md
+              else
+                echo "_(No cross-repository integration contracts apply to this demand.)_"
+              fi
             } > child_body.md
 
             jq -n --arg title "[$ROLE] $PARENT_TITLE" \
@@ -177,6 +196,6 @@ jobs:
             -f "labels[]=implementing" >/dev/null
           gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/awaiting-scope-approval" >/dev/null 2>&1 || true
 
-          MSG="Fan-out complete. Each repository now runs its own workflow, in its own VM, with no shared context. Implementation only starts after the technical plan is approved on the sub-issue."
+          MSG="Fan-out complete. Each sub-issue includes the integration contracts defined by the Tech Lead. Each repository runs its own workflow in its own VM. Implementation only starts after the technical plan is approved on the sub-issue."
           jq -n --arg body "$MSG" '{body: $body}' > comment_payload.json
           gh api "repos/$REPO/issues/$ISSUE/comments" --input comment_payload.json
