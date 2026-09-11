@@ -1,23 +1,18 @@
 name: agent-plan (reusable)
 
 # Runs INSIDE the product repo, on the SUB-ISSUE. One or more times:
-# on sub-issue creation, and again for each human comment while the plan
-# has not been approved. Uses the repo's own role (frontend-engineer or
-# backend-engineer) + the writing-plans skill (with the iteration section).
+# on sub-issue creation (via repository_dispatch from agent-dispatch) and
+# again after a tech-lead revision request (re-dispatched by agent-plan-review).
+# Uses the repo's own role (frontend-engineer or backend-engineer) +
+# the writing-plans skill (with the iteration section).
 #
-# status "ask"      -> posts a question OR the proposed plan (kind indicates
-#                      which), keeps planning
-# status "approved" -> marks the last published plan as final
-#                      (<!-- pipe:plan-final -->), adds plan-approved label
-#                      (the caller listens for this label to trigger
-#                      agent-dev for implementation), and fills the
-#                      ## Technical Scope section in the sub-issue body
-# status "escalated" -> posts the reason and stops
+# status "ok"       -> posts the proposed plan with <!-- pipe:plan -->,
+#                      applies plan-review-requested; Tech Lead reviews
+#                      automatically via agent-plan-review.yml
+# status "escalated" -> posts the reason and stops (human must intervene)
 #
-# execution_id is OPTIONAL here: on the first turn it comes from the
-# dispatch payload; on subsequent turns (triggered by comment, with no
-# payload) it is recovered from the "execution:<id>" label that
-# agent-dispatch applied to the sub-issue when it created it.
+# execution_id is OPTIONAL: on the first turn it comes from the dispatch
+# payload; on re-turns it comes from the dispatch payload sent by agent-plan-review.
 
 on:
   workflow_call:
@@ -167,9 +162,14 @@ jobs:
             echo ""
             if [ "$TOTAL" -gt 0 ]; then
               echo "## Conversation so far (last $N of $TOTAL comment(s), in order)"
-              echo "Comments marked with [PIPE] are your own previous turns;"
-              echo "the others are from the human."
-              jq -r '.[] | (if (.body | contains("<!-- pipe:plan -->")) then "**[PIPE]**" else "**[HUMAN] \(.user.login)**" end) + "\n" + .body + "\n"' comments.json
+              echo "Comments marked with [PIPE] are your own previous plans;"
+              echo "[TECH-LEAD REVIEW] comments contain the tech-lead's evaluation — incorporate all revision feedback before resubmitting."
+              jq -r '.[] | (
+                if (.body | contains("<!-- pipe:plan-review -->")) then "**[TECH-LEAD REVIEW]**"
+                elif (.body | contains("<!-- pipe:plan -->")) then "**[PIPE — your previous plan]**"
+                else "**[HUMAN] \(.user.login)**"
+                end
+              ) + "\n" + .body + "\n"' comments.json
             else
               echo "## Conversation so far"
               echo "(no comments yet — this is the first turn)"
@@ -179,12 +179,10 @@ jobs:
             echo "Apply the writing-plans skill, iteration section."
             echo "For this planning phase (not the implementation phase), use this output format:"
             echo "- Write natural language markdown."
-            echo "- When proposing a plan, start the content block with '## Proposed plan'."
-            echo "- When asking a question, start the content block with '## Question'."
+            echo "- Start the content block with '## Proposed plan'."
+            echo "- If prior [PIPE-REVIEW] comments exist, incorporate their specific feedback before re-proposing."
             echo "- End your response with exactly one status marker on its own line:"
-            echo "  <!-- codex:status:ask --> when posting a plan or question for review"
-            echo "  <!-- codex:status:approved --> when the last HUMAN comment explicitly"
-            echo "  approves a prior [PIPE] plan (do not use this status on your own initiative)"
+            echo "  <!-- codex:status:ok --> when your plan is complete and ready for tech-lead review"
             echo "  <!-- codex:status:escalated --> to stop and request human intervention"
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
@@ -232,7 +230,7 @@ jobs:
               echo "Dispatched to Codex Cloud — waiting for planning bot response on sub-issue #$SUB_ISSUE."
               ;;
 
-            ask)
+            ok)
               {
                 printf '%s\n' "$AGENT_BODY"
                 echo ""
@@ -244,59 +242,9 @@ jobs:
               gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
 
               gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=planning" >/dev/null
-              ;;
-
-            approved)
-              # Mark the last comment with "## Proposed plan" as the final plan,
-              # so agent-dev (implementation) can find it without re-reading the
-              # entire conversation.
-              LAST_PLAN_ID=$(gh api "repos/$REPO/issues/$SUB_ISSUE/comments" \
-                --jq '[.[] | select(.body | contains("## Proposed plan"))] | last | .id')
-
-              APPROVED_PLAN_CONTENT=""
-              if [ -n "$LAST_PLAN_ID" ] && [ "$LAST_PLAN_ID" != "null" ]; then
-                CURRENT=$(gh api "repos/$REPO/issues/comments/$LAST_PLAN_ID" --jq '.body')
-                APPROVED_PLAN_CONTENT="$CURRENT"
-                NEW_BODY=$(printf '%s\n<!-- pipe:plan-final -->' "$CURRENT")
-                jq -n --arg body "$NEW_BODY" '{body: $body}' > mark_payload.json
-                gh api -X PATCH "repos/$REPO/issues/comments/$LAST_PLAN_ID" --input mark_payload.json
-              else
-                echo "::warning::No comment with '## Proposed plan' found to mark as final."
-              fi
-
-              # Fill ## Technical Scope in the sub-issue body with the approved plan.
-              CURRENT_BODY=$(jq -r '.body // ""' subissue.json)
-              export APPROVED_PLAN_CONTENT
-              NEW_ISSUE_BODY=$(awk '
-                BEGIN{plan=ENVIRON["APPROVED_PLAN_CONTENT"]; done=0}
-                /^## Technical Scope/{
-                  print; print "";
-                  print plan;
-                  skip=1; done=1; next
-                }
-                skip && /^## /{ skip=0 }
-                skip{ next }
-                { print }
-              ' <<< "$CURRENT_BODY")
-
-              jq -n --arg body "$NEW_ISSUE_BODY" '{body: $body}' > body_payload.json
-              gh api -X PATCH "repos/$REPO/issues/$SUB_ISSUE" --input body_payload.json
-              echo "Technical Scope section filled in sub-issue body"
-
-              {
-                echo "**Plan approved.** Proceeding to implementation."
-                echo ""
-                echo "---"
-                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: planning concluded_"
-                echo "<!-- pipe:plan -->"
-              } > comment.md
-              jq -Rs '{body: .}' comment.md > payload.json
-              gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
-
-              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
-                -f "labels[]=plan-approved" >/dev/null
+                -f "labels[]=plan-review-requested" >/dev/null
               gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/planning" >/dev/null 2>&1 || true
+              echo "Plan posted — plan-review-requested label applied. Tech Lead will review automatically."
               ;;
 
             escalated)

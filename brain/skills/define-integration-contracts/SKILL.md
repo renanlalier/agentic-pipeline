@@ -282,10 +282,45 @@ Close the contracts document with a versioning table covering every contract def
 
 ---
 
+## 5. Per-repository implementation briefs
+
+After the versioning summary, write one implementation brief per repository in scope.
+Each brief gives the engineer in that repository exactly what they need to implement
+their side without coordinating out-of-band.
+
+Use these extraction markers so the dispatch pipeline can inject the right brief
+into each sub-issue automatically:
+
+```
+<!-- repo-brief:app-poc-1 -->
+### app-poc-1 — frontend-engineer
+
+**What to build:**
+1. (ordered list of concrete implementation tasks for this repo)
+
+**Contracts consumed:** (which endpoints/events from the OpenAPI/event sections above this repo calls or subscribes to)
+
+**Contracts produced:** (what this repo exposes or publishes, if anything)
+
+**Out of scope for this repo:** (explicit statement of what the other repo is responsible for)
+<!-- /repo-brief:app-poc-1 -->
+```
+
+Rules:
+- Write one block per repository in scope. The repo name in the markers must match
+  exactly the GitHub repository name (e.g., `app-poc-1`, `app-poc-2`).
+- Be specific and actionable — the engineer must be able to start implementing
+  without reading any other document.
+- Cross-reference the exact endpoint paths and event names from sections 2 and 3.
+- If a repo has no cross-repo integration, state that explicitly and describe the
+  isolated work it needs to do.
+
+---
+
 ## Output format
 
-Wrap the entire document — diagram, OpenAPI snippets, event contracts, versioning summary —
-in the pipeline delimiters:
+Wrap the entire document — diagram, OpenAPI snippets, event contracts, versioning
+summary, and per-repo briefs — in the pipeline delimiters:
 
 ```
 <!-- contracts-begin -->
@@ -318,5 +353,19 @@ graph LR
   A["<repo-name>"]
   style A fill:#e8f4e8,stroke:#4caf50
 ```
+
+<!-- repo-brief:<repo-name> -->
+### <repo-name> — <role>
+
+**What to build:**
+(concrete description of the isolated change)
+
+**Contracts consumed:** None — this is a standalone change.
+
+**Contracts produced:** None — this change does not affect any shared API or event.
+
+**Out of scope for this repo:** N/A — this demand is confined to this repository.
+<!-- /repo-brief:<repo-name> -->
+
 <!-- contracts-end -->
 ````

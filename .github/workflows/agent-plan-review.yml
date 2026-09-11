@@ -1,0 +1,307 @@
+name: agent-plan-review (reusable)
+
+# Tech-lead reviews the engineer's proposed plan (agent-to-agent, no human gate).
+# Runs INSIDE the product repo, on the sub-issue.
+#
+# status "approved"        → posts approval comment + plan-approved label
+# status "revision-needed" → posts feedback comment + re-dispatches agent-plan
+# status "escalated"       → posts the reason and stops (human must intervene)
+#
+# Triggered by on-plan-review.yml in each product repo when the label
+# plan-review-requested is applied by agent-plan.
+
+on:
+  workflow_call:
+    inputs:
+      sub_issue:
+        required: true
+        type: string
+      role:
+        description: "Engineer role for re-dispatch (frontend-engineer | backend-engineer)"
+        required: true
+        type: string
+      execution_id:
+        required: false
+        type: string
+        default: ""
+      cli_override:
+        required: false
+        type: string
+        default: ""
+      model_override:
+        required: false
+        type: string
+        default: ""
+      execution_target:
+        required: false
+        type: string
+        default: ""
+      github_token:
+        required: false
+        type: string
+        default: ""
+      secrets_source:
+        description: "Override secrets.source from .agentic/config.yml. 'github-secrets' | 'vault'"
+        required: false
+        type: string
+        default: ""
+      requester:
+        description: "GitHub username of the demand author."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      APP_ID:
+        required: true
+        description: "GitHub App ID for generating a scoped installation token"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (PEM) for generating a scoped installation token"
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      CURSOR_API_KEY:
+        required: false
+      CONTEXT7_API_KEY:
+        required: false
+
+jobs:
+  review-plan:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+      id-token: write
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+      AZURE_VAULT_URL: ${{ vars.AZURE_VAULT_URL }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout platform
+        uses: actions/checkout@v5
+        with:
+          repository: renanlalier/agentic-pipeline
+          ref: v1
+          path: .platform
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Resolve secrets_source (level 3 → 2)
+        id: secrets_src
+        run: |
+          set -euo pipefail
+          SRC="${{ inputs.secrets_source }}"
+          [ -z "$SRC" ] && SRC=$(yq -r '.secrets.source // ""' .agentic/config.yml 2>/dev/null || echo "")
+          [ -z "$SRC" ] && SRC="github-secrets"
+          echo "secrets_source=$SRC" >> "$GITHUB_OUTPUT"
+          echo "Secrets source resolved to: $SRC"
+
+      - name: Azure login (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Export vault env vars (vault source)
+        if: steps.secrets_src.outputs.secrets_source == 'vault'
+        run: echo "AZURE_VAULT_URL=${{ vars.AZURE_VAULT_URL }}" >> "$GITHUB_ENV"
+
+      - name: Resolve execution_id and requester from sub-issue labels
+        id: exec
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+        run: |
+          set -euo pipefail
+          EXEC_ID="${{ inputs.execution_id }}"
+          REQUESTER="${{ inputs.requester }}"
+
+          gh api "repos/$REPO/issues/$SUB_ISSUE" > subissue.json
+
+          if [ -z "$EXEC_ID" ]; then
+            EXEC_ID=$(jq -r '.labels[].name' subissue.json \
+              | grep '^execution:' | sed 's/^execution://' | head -1 || true)
+          fi
+          if [ -z "$EXEC_ID" ]; then
+            echo "::error::execution_id was not provided and no execution:* label exists on sub-issue #$SUB_ISSUE."
+            exit 1
+          fi
+
+          if [ -z "$REQUESTER" ]; then
+            REQUESTER=$(jq -r '.labels[].name' subissue.json \
+              | grep '^requester:' | sed 's/^requester://' | head -1 || true)
+          fi
+
+          echo "execution_id=$EXEC_ID" >> "$GITHUB_OUTPUT"
+          echo "requester=$REQUESTER" >> "$GITHUB_OUTPUT"
+          echo "resolved execution_id=$EXEC_ID, requester=$REQUESTER"
+
+      - name: Read sub-issue body and last plan comment
+        id: context
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+          EXEC_ID: ${{ steps.exec.outputs.execution_id }}
+        run: |
+          set -euo pipefail
+
+          SUBISSUE_BODY=$(jq -r '.body // ""' subissue.json)
+
+          gh api "repos/$REPO/issues/$SUB_ISSUE/comments" > all_comments.json
+
+          LAST_PLAN=$(jq -r '[.[] | select(.body | contains("<!-- pipe:plan -->"))] | last | .body // ""' all_comments.json)
+
+          DELIM=$(openssl rand -hex 16)
+          {
+            echo "prompt<<$DELIM"
+            echo "MODE: PLAN_REVIEW"
+            echo ""
+            echo "Review the technical plan below against the Task Brief and Integration Contracts"
+            echo "in the sub-issue body. Apply the review-technical-plan skill."
+            echo ""
+            echo "## Sub-issue body (Task Brief + Integration Contracts)"
+            echo ""
+            printf '%s\n' "$SUBISSUE_BODY"
+            echo ""
+            echo "## Proposed plan"
+            echo ""
+            if [ -n "$LAST_PLAN" ] && [ "$LAST_PLAN" != "null" ]; then
+              printf '%s\n' "$LAST_PLAN"
+            else
+              echo "(no plan comment found — the engineer has not yet proposed a plan)"
+            fi
+            echo ""
+            echo "Execution ID: $EXEC_ID"
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Execute tech-lead role (plan review)
+        id: agent
+        uses: ./.platform/actions/run-agent
+        with:
+          role: tech-lead
+          cli_override: ${{ inputs.cli_override }}
+          model_override: ${{ inputs.model_override }}
+          execution_id: ${{ steps.exec.outputs.execution_id }}
+          prompt: ${{ steps.context.outputs.prompt }}
+          platform_path: .platform
+          execution_target: ${{ inputs.execution_target }}
+          issue_number: ${{ inputs.sub_issue }}
+          repo_full_name: ${{ github.repository }}
+          github_token: ${{ inputs.github_token != '' && inputs.github_token || steps.app-token.outputs.token }}
+          requester: ${{ steps.exec.outputs.requester }}
+          secrets_source: ${{ steps.secrets_src.outputs.secrets_source }}
+
+      - name: Act on tech-lead review decision
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          SUB_ISSUE: ${{ inputs.sub_issue }}
+          EXEC_ID: ${{ steps.exec.outputs.execution_id }}
+          ROLE: ${{ inputs.role }}
+          CLI_OVERRIDE: ${{ inputs.cli_override }}
+          MODEL_OVERRIDE: ${{ inputs.model_override }}
+          REQUESTER: ${{ steps.exec.outputs.requester }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENT_BODY: ${{ steps.agent.outputs.body }}
+          STATUS: ${{ steps.agent.outputs.status }}
+        run: |
+          set -euo pipefail
+
+          echo "--- tech-lead review output (status: $STATUS) ---"
+          printf '%s\n' "$AGENT_BODY"
+
+          case "$STATUS" in
+            dispatched_to_cloud)
+              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+                -f "labels[]=awaiting-agent-response" >/dev/null
+              echo "Dispatched to Codex Cloud — waiting for tech-lead review response on sub-issue #$SUB_ISSUE."
+              exit 0
+              ;;
+
+            approved)
+              {
+                printf '%s\n' "$AGENT_BODY"
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: plan-review_"
+                echo "<!-- pipe:plan-review -->"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
+
+              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+                -f "labels[]=plan-approved" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/plan-review-requested" >/dev/null 2>&1 || true
+
+              echo "Plan approved — plan-approved label applied. agent-dev will trigger automatically."
+              ;;
+
+            revision-needed)
+              {
+                printf '%s\n' "$AGENT_BODY"
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: plan-review_"
+                echo "<!-- pipe:plan-review -->"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
+
+              gh api "repos/$REPO/issues/$SUB_ISSUE/labels" \
+                -f "labels[]=planning" >/dev/null
+              gh api -X DELETE "repos/$REPO/issues/$SUB_ISSUE/labels/plan-review-requested" >/dev/null 2>&1 || true
+
+              # Re-trigger engineer planning — tech-lead feedback is now visible in the conversation
+              gh api "repos/$REPO/dispatches" \
+                -f event_type=agent-plan \
+                -f "client_payload[execution_id]=$EXEC_ID" \
+                -f "client_payload[sub_issue]=$SUB_ISSUE" \
+                -f "client_payload[role]=$ROLE" \
+                -f "client_payload[contract_ref]=v1" \
+                -f "client_payload[cli_override]=$CLI_OVERRIDE" \
+                -f "client_payload[model_override]=$MODEL_OVERRIDE" \
+                -f "client_payload[requester]=$REQUESTER"
+
+              echo "Revision requested — agent-plan re-dispatched to $REPO."
+              ;;
+
+            escalated)
+              {
+                printf '%s\n' "$AGENT_BODY"
+                echo ""
+                echo "---"
+                echo "_\`execution_id\`: \`$EXEC_ID\` · [run for this step]($RUN_URL) · phase: plan-review_"
+                echo "<!-- pipe:plan-review -->"
+              } > comment.md
+              jq -Rs '{body: .}' comment.md > payload.json
+              gh api "repos/$REPO/issues/$SUB_ISSUE/comments" --input payload.json
+              exit 1
+              ;;
+
+            *)
+              echo "::error::Unknown status: $STATUS"
+              exit 1
+              ;;
+          esac
