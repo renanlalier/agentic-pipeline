@@ -1,6 +1,6 @@
 name: agent-dispatch (reusable)
 
-# Step 3 of the flow, AFTER HITL 1. Runs in the INTAKE repo.
+# Step 3 of the flow, AFTER HITL 2 (contracts-approved). Runs in the INTAKE repo.
 # Creates one cross-repo sub-issue per approved repository, marks it with
 # the label execution:<id> (so that comment/label-driven workflows in the
 # planning phase can recover the execution_id without a dispatch payload),
@@ -52,7 +52,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Recover the approved scope and integration contracts
+      - name: Recover contracts and scope
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -60,29 +60,40 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Recover the contracts comment (posted by agent-contracts, ends with <!-- pipe:contracts -->)
           gh api "repos/$REPO/issues/$ISSUE/comments" \
-            --jq '[.[] | select(.body | contains("Scope proposed by the pipeline"))] | last | .body' \
-            > scope.md
+            --jq '[.[] | select(.body | contains("<!-- pipe:contracts -->"))] | last | .body // ""' \
+            > contracts_raw.md
 
-          # Parse the table: repo | role | why included | type
-          awk -F'|' '/^\| `/ {
-            gsub(/[` ]/, "", $2); gsub(/[` ]/, "", $3); gsub(/[` ]/, "", $5);
-            if ($2 != "" && $2 != "repository") print $2 "|" $3 "|" $5
-          }' scope.md > scope.txt
-
-          if [ ! -s scope.txt ]; then
-            echo "::error::Could not recover the approved scope from the issue."
-            echo "--- comment read ---"; cat scope.md
+          if [ ! -s contracts_raw.md ]; then
+            echo "::error::No contracts comment (<!-- pipe:contracts -->) found on issue #$ISSUE."
+            echo "Make sure agent-contracts ran and the contracts-approved label was applied after."
             exit 1
           fi
 
-          echo "--- approved scope ---"; cat scope.txt
+          # Extract scope (repo|role|type) from <!-- repo-brief:REPO:ROLE:TYPE --> opening markers.
+          # Closing markers (<!-- /repo-brief:... -->) are skipped by the [^/] guard.
+          awk 'match($0, /<!-- repo-brief:[^/]/) {
+            line = $0
+            sub(/.*<!-- repo-brief:/, "", line)
+            sub(/ -->.*/, "", line)
+            n = split(line, parts, ":")
+            repo = parts[1]; role = parts[2]; type = parts[3]
+            gsub(/ /, "", repo); gsub(/ /, "", role); gsub(/ /, "", type)
+            if (type == "") type = "task"
+            if (repo != "") print repo "|" role "|" type
+          }' contracts_raw.md > scope.txt
 
-          # Recover integration contracts from the last contracts comment
-          gh api "repos/$REPO/issues/$ISSUE/comments" \
-            --jq '[.[] | select(.body | contains("contracts-begin"))] | last | .body // ""' \
-            > contracts_raw.md
+          if [ ! -s scope.txt ]; then
+            echo "::error::No repo-brief markers found in the contracts comment."
+            echo "--- contracts comment ---"; cat contracts_raw.md
+            exit 1
+          fi
 
+          echo "--- approved scope (from repo-brief markers) ---"
+          cat scope.txt
+
+          # Extract the section between contracts-begin / contracts-end delimiters
           awk '/<!-- contracts-begin -->/{found=1; next} /<!-- contracts-end -->/{found=0} found' \
             contracts_raw.md > contracts.md
 
@@ -112,7 +123,8 @@ jobs:
             echo "::group::$REPO ($ROLE, type=$ISSUE_TYPE)"
 
             # Extract this repo's implementation brief from the contracts document
-            awk "/<!-- repo-brief:${REPO} -->/{found=1; next} /<!-- \/repo-brief:${REPO} -->/{found=0} found" \
+            # Opening marker format: <!-- repo-brief:REPO:ROLE:TYPE --> (colon after repo name)
+            awk "/<!-- repo-brief:${REPO}:/{found=1; next} /<!-- \/repo-brief:${REPO} -->/{found=0} found" \
               contracts_raw.md > repo_brief.md
 
             {

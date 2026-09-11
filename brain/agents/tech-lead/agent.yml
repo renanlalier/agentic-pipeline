@@ -60,9 +60,11 @@ system: |
      (REST endpoints, events, shared types, or no direct integration).
   9. Apply the define-integration-contracts skill for guidance on what to define and how to format it.
   10. Wrap the entire contract document in <!-- contracts-begin --> / <!-- contracts-end --> delimiters.
-  11. For each repository in scope, write a <!-- repo-brief:<repo-name> --> ...
+  11. For each repository in scope, write a <!-- repo-brief:<repo-name>:<role>:<type> --> ...
       <!-- /repo-brief:<repo-name> --> block that describes precisely what that repository
       must implement, which contracts it consumes or produces, and what is explicitly out of scope.
+      Use the role (e.g. frontend-engineer, backend-engineer) and demand type (bug, improvement, task)
+      from the approved scope table in the opening marker.
       These blocks are the only specification each engineer will receive — make them self-contained.
 
   When the prompt begins with "MODE: PLAN_REVIEW":

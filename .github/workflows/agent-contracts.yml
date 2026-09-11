@@ -8,7 +8,10 @@ name: agent-contracts (reusable)
 # integration contracts between those repositories (API endpoints, shared types,
 # events, versioning). Contracts are posted as a comment delimited by
 # <!-- contracts-begin --> / <!-- contracts-end --> and the contracts-defined
-# label is applied, which then triggers agent-dispatch.
+# label is applied.
+#
+# HITL 2 — contracts approval: after reviewing the contracts, the human applies
+# the contracts-approved label, which triggers agent-dispatch (not automatic).
 #
 # NOTE: issue text is never interpolated with ${{ }} directly inside a run block.
 # It always travels through a file or an environment variable.
@@ -132,7 +135,7 @@ jobs:
           echo "--- issue content read ---"
           cat issue.txt
 
-      - name: Recover approved scope
+      - name: Recover conversation context
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -140,17 +143,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Prefer the tech-lead's last scope proposal (<!-- pipe:lead --> marker),
+          # which contains the structured scope table. Fall back to the last 10
+          # comments if the comment was deleted or not yet posted.
           gh api "repos/$REPO/issues/$ISSUE/comments" \
-            --jq '[.[] | select(.body | contains("Scope proposed by the pipeline"))] | last | .body // ""' \
-            > scope.md
+            --jq '[.[] | select(.body | contains("<!-- pipe:lead -->"))] | last | .body // ""' \
+            > scope_context.md
 
-          if [ ! -s scope.md ]; then
-            echo "::error::Could not find an approved scope proposal comment on issue #$ISSUE."
-            exit 1
+          if [ -s scope_context.md ]; then
+            echo "Scope context recovered from pipe:lead comment."
+          else
+            echo "No pipe:lead comment found — using last 10 comments as context."
+            gh api "repos/$REPO/issues/$ISSUE/comments" \
+              --jq '[.[-10:] | .[] | "---\n\(.body)"] | join("\n\n")' \
+              > scope_context.md
           fi
 
-          echo "--- approved scope recovered ---"
-          cat scope.md
+          echo "--- scope context ---"
+          cat scope_context.md
 
       - name: Build contract-definition prompt
         id: context
@@ -163,8 +173,9 @@ jobs:
             echo "prompt<<PROMPTEOF"
             echo "MODE: CONTRACT_DEFINITION"
             echo ""
-            echo "The scope below has been approved by a human. Your task is NOT to re-propose scope."
-            echo "Your task is to define the integration contracts between the listed repositories"
+            echo "The scope for this demand has been approved by a human (scope-approved label is set)."
+            echo "Your task is NOT to re-propose scope."
+            echo "Your task is to define the integration contracts between the repositories in scope,"
             echo "before any sub-issue is created, so that each engineer can implement their side"
             echo "independently and without ambiguity."
             echo ""
@@ -173,8 +184,8 @@ jobs:
             echo "## Demand"
             cat issue.txt
             echo ""
-            echo "## Approved scope"
-            cat scope.md
+            echo "## Conversation context (scope discussion)"
+            cat scope_context.md
             echo ""
             echo "Execution ID: $EXEC_ID"
             echo "PROMPTEOF"
@@ -241,6 +252,9 @@ jobs:
             echo "---"
             echo "\`execution_id\`: \`$EXEC_ID\` · \`cli\`: \`$CLI\` · \`model\`: \`$MODEL\`"
             echo "[run for this step]($RUN_URL)"
+            echo ""
+            echo "**HITL 2 — contracts approval.** Review the integration contracts above."
+            echo "Apply the \`contracts-approved\` label when ready to proceed with sub-issue dispatch."
             echo "<!-- pipe:contracts -->"
           } > comment.md
 
@@ -252,4 +266,4 @@ jobs:
           gh api "repos/$REPO/issues/$ISSUE/labels" \
             -f "labels[]=contracts-defined" >/dev/null
 
-          echo "contracts-defined label applied — dispatch will fire shortly."
+          echo "contracts-defined label applied — human must apply contracts-approved to trigger dispatch."

@@ -292,7 +292,7 @@ Use these extraction markers so the dispatch pipeline can inject the right brief
 into each sub-issue automatically:
 
 ```
-<!-- repo-brief:app-poc-1 -->
+<!-- repo-brief:app-poc-1:frontend-engineer:task -->
 ### app-poc-1 — frontend-engineer
 
 **What to build:**
@@ -309,6 +309,9 @@ into each sub-issue automatically:
 Rules:
 - Write one block per repository in scope. The repo name in the markers must match
   exactly the GitHub repository name (e.g., `app-poc-1`, `app-poc-2`).
+- The opening marker must include the repo's role (from the approved scope table) and
+  demand type (bug, improvement, task), e.g. `<!-- repo-brief:app-poc-1:frontend-engineer:task -->`.
+  The closing marker uses only the repo name: `<!-- /repo-brief:app-poc-1 -->`.
 - Be specific and actionable — the engineer must be able to start implementing
   without reading any other document.
 - Cross-reference the exact endpoint paths and event names from sections 2 and 3.
@@ -354,7 +357,7 @@ graph LR
   style A fill:#e8f4e8,stroke:#4caf50
 ```
 
-<!-- repo-brief:<repo-name> -->
+<!-- repo-brief:<repo-name>:<role>:<type> -->
 ### <repo-name> — <role>
 
 **What to build:**
